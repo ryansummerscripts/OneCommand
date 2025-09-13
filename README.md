@@ -3,9 +3,13 @@ One command to rule them all
 
 ![Screenshot 2025-09-12 at 9 38 05 PM](https://github.com/user-attachments/assets/aeb89a1a-dad9-443a-af41-dc567bd01105)
 
+------------------------------------------
+
 **About One Command**
 
 This user friendly Terminal script contains over 250+ commands in one! It's purpose to help automate tasks and control macOS in ways that can't easily (or sometimes at all) be done through a GUI.
+
+------------------------------------------
 
 **De-Quarantining & signing Rx Command**
 
@@ -47,14 +51,13 @@ prep /Users/YOURUSERNAME/Downloads/OneCommand.command
 
 Done!
 
+------------------------------------------
 
 **Why do you need to do this?**
-
 
 Chat GPT says:
 
 To sign and notarize in a way that bypasses Gatekeeper, you must enroll in the Apple Developer Program, which costs $99 USD per year.
-
 
 Facts:
 - Free Apple IDs can code sign ad-hoc (codesign -s -) or with a personal signing certificate, but those signatures are not trusted by Gatekeeper. They will not clear quarantine.
@@ -64,6 +67,5 @@ Facts:
 - Notarization (Apple scanning and stapling a ticket to your binary/package) also requires a paid Developer ID. Without notarization, even a valid Developer ID signature will trigger warnings on modern macOS versions.
 
 - Distribution without paying Apple: You can still share scripts, packages, or apps, but users must manually bypass quarantine (right-click → Open, strip with xattr, or allow via Privacy & Security).
-
 
 So: free = always quarantined, user has to override. Paid developer = can notarize, quarantine cleared automatically.
