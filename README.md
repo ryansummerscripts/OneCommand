@@ -11,7 +11,7 @@ This user friendly Terminal script contains over 250+ commands in one! It's purp
 
 ------------------------------------------
 
-**De-Quarantining & signing Rx Command**
+**De-Quarantining & signing OneCommand**
 
 By default, macOS quarantines unsigned files downloaded from the internet. If this command script cannot be opened simply by double-clicking it, you can remove its quarantine attributes & sign it.
 
