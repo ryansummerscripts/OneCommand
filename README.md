@@ -1,5 +1,5 @@
 # OneCommand
-OneCommand to rule them all
+One command to rule them all
 
 ![Screenshot 2025-09-12 at 9 38 05 PM](https://github.com/user-attachments/assets/aeb89a1a-dad9-443a-af41-dc567bd01105)
 
