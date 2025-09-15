@@ -1,9 +1,26 @@
-# OneCommand
+# OneCommand (Lite)
 One command to rule them all
+
+<div align="center">
+<p>Full Version (Paid)</p>
+</div>
+
+<div align="center">
+<p>https://shop.ryansummer.com/p/onecommand/</p>
+</div>
 
 <div align="center">
 <img width="745" height="495" alt="OneCommand_v1 0_(Full)" src="https://github.com/user-attachments/assets/09456e63-6667-434d-a13f-216a90431c69" />
 </div>
+
+<div align="center">
+<p>Lite Version (Free)</p>
+</div>
+
+<div align="center">
+<p>https://github.com/ryansummerscripts/OneCommand</p>
+</div>
+
 <div align="center">
 <img width="745" height="495" alt="OneCommand_v1 0_(Lite)" src="https://github.com/user-attachments/assets/5bd110cb-a7de-4537-bb75-c7561a7d22bc" />
 </div>
