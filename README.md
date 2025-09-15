@@ -120,8 +120,11 @@ So: free = always quarantined, user has to override. Paid developer = can notari
 Simply double click the command file. It will then open Terminal and display the Main Menu. Choose a number, press Enter to continue, and follow the on screen instructions.
 
 · To go back a step in any function/menu item, press B + Enter.
+
 · To return to the main menu at any point, press Q + Enter.
+
 · To interrupt any output or password prompts, press ^C (Control + C).
+
 · To exit the script, press ^C at the Main Menu.
 
 Feel free and drop the .command file in your Applications folder, drag it to the dock, or even pin it directly to Finder by command + dragging it (Notice the 🛠️).
