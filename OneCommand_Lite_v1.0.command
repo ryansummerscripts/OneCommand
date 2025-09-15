@@ -98,7 +98,7 @@ EOF
 }
 
 # Resize Terminal window smaller via osascript
-function set_terminal_height_to_495p(){
+function set_terminal_height_to_500p(){
     osascript <<'EOF'
     tell application "Terminal"
         set b to bounds of front window
@@ -108,7 +108,7 @@ function set_terminal_height_to_495p(){
         set bottomEdge to item 4 of b
         
         -- Keep left/top, keep width same (right - left)
-        set newBottomEdge to topEdge + 495 -- set height to 495 pixels (adjust as needed)
+        set newBottomEdge to topEdge + 500 -- set height to 500 pixels (adjust as needed)
         set bounds of front window to {leftEdge, topEdge, rightEdge, newBottomEdge}
     end tell
 EOF
@@ -197,7 +197,7 @@ display_two_column_menu() {
 main_menu() {
     while true; do
         trap - SIGINT
-        set_terminal_height_to_495p
+        set_terminal_height_to_500p
         clear
         cat <<'EOF'
   ___            ___                              _ 
@@ -439,10 +439,10 @@ function speed_test() {
             if [[ $nav -eq $NAV_QUIT ]]; then
                 return 0
             elif [[ $nav -eq $NAV_BACK ]]; then
-                set_terminal_height_to_495p
+                set_terminal_height_to_500p
                 break
             else
-                set_terminal_height_to_495p
+                set_terminal_height_to_500p
                 break
             fi
         done
@@ -454,7 +454,7 @@ function top_activity_monitor() {
     while true; do
         return_to_menu=true
         trap 'echo; echo "Returning to main menu...from func 9"; return_to_menu=true; return' SIGINT
-        set_terminal_height_to_495p
+        set_terminal_height_to_500p
         clear
         echo "${GR}=============================${NC}"
         echo "${BO}9) 📊 Activity Monitor (Top)${NC}"
@@ -501,7 +501,7 @@ function top_activity_monitor() {
 
     # done
     done
-    # set_terminal_height_to_495p
+    # set_terminal_height_to_500p
 }
 
 #====3==== 🖥️ System Information
@@ -509,7 +509,7 @@ function system_information() {
     while true; do
         return_to_menu=true
         trap 'echo; echo "Returning to main menu...from func 12"; return_to_menu=true; return' SIGINT
-        set_terminal_height_to_495p
+        set_terminal_height_to_500p
         clear
         echo "${GR}=========================${NC}"
         echo "${BO}12) 🖥️  System Information${NC}"
@@ -680,7 +680,7 @@ function system_information() {
             fi
         done
     done
-    set_terminal_height_to_495p
+    set_terminal_height_to_500p
 }
 
 #====4==== 🔄 iCloud Sync Refresh
@@ -1669,9 +1669,12 @@ function macos_preferences() {
         "✏️  Preview: Show Markup toolbar for PDFs by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|delete|Shows Markup toolbar for PDFs by default"
         "✏️  Preview: Show Markup toolbar for images by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|delete|Shows Markup toolbar for images by default"
         "📋 Menu Bar: Never Hide Menu Bar In Fullscreen ${BL}(Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|Never hides the menu bar when in full screen"
-        # "🖥️  Never Hide Menu Bar In Fullscreen|NSGlobalDomain|AppleMenuBarVisibleInFullscreen|true|false|false|delete|Never hides the menu bar when in full screen;"
+        # "🖥️  Never Hide Menu Bar In Fullscreen|NSGlobalDomain|AppleMenuBarVisibleInFullscreen|true|false|false|delete|Never hides the menu bar when in full screen"
         "🔍 Spotlight: Enable Clipboard Manager/Search ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|SPPasteboardFTEEngaged|true|false|false|false|Enable Spotlight's Clipboard Manager/Search"
-
+        # "🔍 Spotlight: Increase Clipboard history from 8hrs to 24hrs ${BO}(Untested)${NC} ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|86400|28800|28800|28800|Increase Clipboard history from 8hrs to 24hrs ${BO}(Untested)${NC}"
+        "📏 Shrink sidebar width to the minimum (1 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|188||Shrinks sidebar width to the minimum"    # Tahoe 26+
+        "📏 Shrink sidebar width to the minimum (2 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161||Shrinks sidebar width (in other views) to the minimum"    # Tahoe 26+
+        
         # Format: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Command|Type|Description"
         # Or group header: "GROUP|<Title>|<Optional Subtext>"
         "GROUP|🆕 [NEW for ${BO}${GY}${GR}macOS Sonoma 14${NC} - ${MA}macOS Sequoia 15${NC}]|"
@@ -1787,6 +1790,8 @@ function macos_preferences() {
         "📄 Set Default Finder to List View|com.apple.finder|FXPreferredViewStyle|Nlsv|icnv||delete|Sets Finder's default view to List instead of Icon"
         "🔍 Search the current folder when performing a search|com.apple.finder|FXDefaultSearchScope|SCcf|SCev|SCev|delete|Uses the current folder when performing a search"
         "📏 Set Finder/Settings sidebar icons to small instead of medium|NSGlobalDomain|NSTableViewDefaultSizeMode|1|2||delete|Sets Finder/Settings sidebar icons to small instead of medium"
+        "📏 Shrink sidebar width to the minimum (1 of 2) ${MA}(Sequoia 15 and below)${NC}|com.apple.finder|SidebarWidth|143|164|164||Shrinks sidebar width to the minimum"        
+        "📏 Shrink sidebar width to the minimum (2 of 2) ${MA}(Sequoia 15 and below)${NC}|com.apple.finder|FK_SidebarWidth|143|164|164||Shrinks sidebar width (in other views) to the minimum"        
         "👻 Show hidden files (or toggle them with ⌘ ⇧ .)|com.apple.finder|AppleShowAllFiles|true|false||delete|Shows hidden files. (You can also show them temporarily with ⌘ + ⇧ + .)"
         # "🚫 Don't show 'Recents' in the sidebar|com.apple.finder|PreferencesWindow.LastSelection|SDBR|SDBR|TAGS|TAGS|"
         "🚫 Disable the warning when changing a file extension|com.apple.finder|FXEnableExtensionChangeWarning|false|true||delete|Disables the warning when changing a file extension in the Finder"
@@ -1811,7 +1816,7 @@ function macos_preferences() {
         # Format: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Command|Type|Description"
         # Or group header: "GROUP|<Title>|<Optional Subtext>"
         "GROUP|🖱️  [Mouse]|"
-        "🚫 Disable Natural Scrolling (applies globally)|NSGlobalDomain|com.apple.swipescrolldirection|false|true||delete|Disables natural scrolling direction (applies globally)"
+        "🚫 Disable Natural Scrolling ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|com.apple.swipescrolldirection|false|true||delete|Disables natural scrolling direction"
         "🚀 Increase Mouse Tracking Speed beyond default ${BO}(Requires Restart)${NC}|NSGlobalDomain|com.apple.mouse.scaling|5|3.0||delete|Increases mouse tracking speed beyond default"
         "🖱️  Enable secondary button (on bluetooth multi-touch mice)|com.apple.driver.AppleBluetoothMultitouch.mouse|MouseButtonMode|TwoButton|OneButton||delete|Enables secondary button (on bluetooth multi-touch mice)"
 
@@ -1847,7 +1852,19 @@ function macos_preferences() {
         "↔️  Allow tab navigation across UI|NSGlobalDomain|AppleKeyboardUIMode|2|0|2|delete|Enables full keyboard access for all controls"
         "😌 Fn/🌐 key Shows Emoji & Symbols ${BO}(Requires Restart)${NC}|com.apple.HIToolbox|AppleFnUsageType|2|0|0|0|Fn/🌐 key Shows Emoji & Symbols. ${BO}Note that this requires a restart to take effect.${NC}"
         "🚫 Disable accent options when a key is held down ${BO}(Requires Restart)${NC}|NSGlobalDomain|ApplePressAndHoldEnabled|false|true|true|true|Disables accent options when a key is held down. ${BO}Note that this requires a restart to take effect.${NC}"
-     
+        # "⌨️  Finder: Custom Shortcuts|com.apple.finder|NSUserKeyEquivalents|'{\"Get Info\"=\"@~i\";\"Show Inspector\"=\"@i\";\"Show Next Tab\"=\"@~\\U2192\";\"Show Previous Tab\"=\"@~\\U2190\";}'|{}||key_equivalents|Sets Finder keyboard shortcuts"
+        # "⌨️  Ableton Live: Custom Shortcuts|com.ableton.live|NSUserKeyEquivalents|'{\"Freeze Track\"=\"@~f\";\"Plug-In Windows\"=\"@~w\";\"Record to Arrangement\"=\"@ \";}'|{}||key_equivalents|Sets Live keyboard shortcuts"
+        # "⌨️  Preview: Toggle Markup Toolbar|com.apple.Preview|NSUserKeyEquivalents|'{\"Hide Markup Toolbar\"=\"@~m\";\"Show Markup Toolbar\"=\"@~m\";}'|{}||key_equivalents|Sets Preview keyboard shortcuts"
+        # "⌨️  Safari: Next/Prev Tab|com.apple.Safari|NSUserKeyEquivalents|'{\"Show Next Tab\"=\"@~\\U2192\";\"Show Previous Tab\"=\"@~\\U2190\";}'|{}||key_equivalents|Sets Safari tab shortcuts"
+        # "⌨️  Terminal: Common Shortcuts|com.apple.Terminal|NSUserKeyEquivalents|'{New=\"@t\";\"Show Fonts\"=\"@n\";\"Show Next Tab\"=\"@~\\U2192\";\"Show Previous Tab\"=\"@~\\U2190\";}'|{}||key_equivalents|Sets Terminal shortcuts"
+        # "⌨️  Apparency: Next/Prev Tab|com.mothersruin.Apparency|NSUserKeyEquivalents|'{\"Show Next Tab\"=\"@~\\U2192\";\"Show Previous Tab\"=\"@~\\U2190\";}'|{}||key_equivalents|Sets Apparency tab shortcuts"
+        # "⌨️  Suspicious Package: Tab Shortcuts|com.mothersruin.SuspiciousPackageApp|NSUserKeyEquivalents|'{\"Next Tab in Package\"=\"@~]\";\"Previous Tab in Package\"=\"@~[\";\"Show Next Tab\"=\"@~\\U2192\";\"Show Previous Tab\"=\"@~\\U2190\";}'|{}||key_equivalents|Sets Suspicious Package shortcuts"
+        # "⌨️  TextEdit: Next/Prev Tab|com.apple.TextEdit|NSUserKeyEquivalents|'{\"Show Next Tab\"=\"@~\\U2192\";\"Show Previous Tab\"=\"@~\\U2190\";}'|{}||key_equivalents|Sets TextEdit tab shortcuts"
+        # "⌨️  Sononym: Play/Stop|com.sononym.sononym|NSUserKeyEquivalents|'{\"Play Selected File\"=\"\\U2192\";\"Stop Playback/Recording\"=\"\\U2190\";}'|{}||key_equivalents|Sets Sononym shortcuts"
+        # "⌨️  UTM: Common Shortcuts|com.utmapp.UTM|NSUserKeyEquivalents|'{\"Hide UTM\"=\"~h\";\"Open...\"=\"~o\";\"Quit UTM\"=\"~q\";}'|{}||key_equivalents|Sets UTM shortcuts"
+        # "⌨️  MediaInfo: Close All|net.mediaarea.mediainfo.mac|NSUserKeyEquivalents|'{\"Close All Files\"=\"@~w\";}'|{}||key_equivalents|Sets MediaInfo shortcut"
+        # "⌨️  FindAnyFile: Close All|org.tempel.findanyfile|NSUserKeyEquivalents|'{\"Close All Files\"=\"@~w\";}'|{}||key_equivalents|Sets FindAnyFile shortcut"
+        
         # Format: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Command|Type|Description"
         # Or group header: "GROUP|<Title>|<Optional Subtext>"
         "GROUP|📋 [Menu Bar & Control Center]|${YE}(To prevent clutter, hide all and just use Control Center 👍)${NC}"
@@ -1893,7 +1910,7 @@ function macos_preferences() {
         # Format: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Command|Type|Description"
         # Or group header: "GROUP|<Title>|<Optional Subtext>"
         "GROUP|📝 [TextEdit]|"
-        "🗂️  Always show tab bar in TextEdit|com.apple.TextEdit|NSWindowTabbingShoudShowTabBarKey-NSWindow-DocumentWindowController-DocumentWindowController-VT-FS|1|delete|delete|delete|Shows Tab Bar by default in TextEdit"
+        "🗂️  Always show tab bar in TextEdit|com.apple.TextEdit|NSWindowTabbingShoudShowTabBarKey-NSWindow-DocumentWindowController-DocumentWindowController-VT-FS|true|false|false|delete|Shows Tab Bar by default in TextEdit"
         "📝 Create a new document by default when opening TextEdit|com.apple.TextEdit|NSShowAppCentricOpenPanelInsteadOfUntitledFile|false|true||delete|Opens new document by default in TextEdit"
         "📝 Use Plain Text Mode for TextEdit|com.apple.TextEdit|RichText|false|true|true|true|Sets TextEdit to use Plain Text instead of Rich Text by default"
         "📂 Expand Default Save Panel in TextEdit (1 of 2)|com.apple.TextEdit|NSNavPanelExpandedStateForSaveMode|true|false|false|false|Expands the save dialog in TextEdit by default"
@@ -1905,7 +1922,7 @@ function macos_preferences() {
         # Format: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Command|Type|Description"
         # Or group header: "GROUP|<Title>|<Optional Subtext>"
         "GROUP|👾 [Terminal]|"
-        "🗂️  Always show tab bar in Terminal|com.apple.Terminal|NSWindowTabbingShoudShowTabBarKey-TTWindow-TTWindowController-TTWindowController-VT-FS|1|delete||delete|Shows Tab Bar by default in Terminal"
+        "🗂️  Always show tab bar in Terminal|com.apple.Terminal|NSWindowTabbingShoudShowTabBarKey-TTWindow-TTWindowController-TTWindowController-VT-FS|true|false|false|delete|Shows Tab Bar by default in Terminal"
         "⭐️ Use bright colors for bold text|com.apple.Terminal|UseBrightBold|true|false|false|delete|Uses bright colors for bold text"
         
         # Format: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Command|Type|Description"
@@ -3213,7 +3230,7 @@ function macos_preferences() {
     done
 
     # Restore Terminal window size after exiting menu
-    set_terminal_height_to_495p
+    set_terminal_height_to_500p
 }
 
 #====8==== ℹ️ About OneCommand
