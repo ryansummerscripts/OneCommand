@@ -1,13 +1,51 @@
 # OneCommand
 One command to rule them all
 
-![Screenshot 2025-09-12 at 9 38 05 PM](https://github.com/user-attachments/assets/aeb89a1a-dad9-443a-af41-dc567bd01105)
+<img width="745" height="495" alt="OneCommand_v1 0_(Full)" src="https://github.com/user-attachments/assets/09456e63-6667-434d-a13f-216a90431c69" />
+<img width="745" height="495" alt="OneCommand_v1 0_(Lite)" src="https://github.com/user-attachments/assets/5bd110cb-a7de-4537-bb75-c7561a7d22bc" />
 
 ------------------------------------------
 
-**About One Command**
+Tested on:
 
-This user friendly Terminal script contains over 250+ commands in one! It's purpose to help automate tasks and control macOS in ways that can't easily (or sometimes at all) be done through a GUI.
+✅ macOS Monterey 12 through Tahoe 26
+
+✅ Intel & Apple Silicon
+
+------------------------------------------
+
+ℹ️ **Introduction:**
+
+**OneCommand** is a macOS utility script that provides a comprehensive set of
+system administration and file management tools through an interactive
+terminal interface. Containing over 250+ commands in one, its purpose is to help automate tasks and control macOS in ways that can't easily (or sometimes at all) be done through a GUI.
+
+**Core Functionality**
+  - **File Security & Permissions:** Remove quarantine flags, change permissions,
+    modify ownership
+  - **Code Signing:** Sign applications and bundles with ad-hoc signatures
+  - **Hash Generation:** Generate SHA256 hashes for files and bundles
+  - **Package Management:** Batch install .pkg files
+  - **Disk Image Tools:** Create/resize disk images and make macOS installers
+  - **System Utilities:** DNS management, network testing, system information
+  - **macOS Preferences:** Configure various default system settings and behaviors
+  - **Difference Tracker:** Track differences/changes to the file system
+    
+
+**Architecture**
+  - **Interactive menu-driven interface with navigation controls**
+  - **Modular function-based design with 20 utility functions**
+  - **Color-coded output using ANSI escape sequences**
+  - **Error handling and interruption support**
+  - **Support for drag-and-drop file operation**
+    
+
+**Key Design Patterns**
+  - **Global navigation system** (back/continue/interrupt/quit)
+  - **Consistent error handling and retry mechanisms**
+  - **Automatic Terminal window resizing when displaying large output**
+  - **Modular function organization with clear separation of concerns**
+  - **User-friendly prompts and status reporting**
 
 ------------------------------------------
 
@@ -15,6 +53,7 @@ This user friendly Terminal script contains over 250+ commands in one! It's purp
 
 By default, macOS quarantines unsigned files downloaded from the internet. If this command script cannot be opened simply by double-clicking it, you can remove its quarantine attributes & sign it.
 
+<img width="260" height="262" alt="GateKeeper msg" src="https://github.com/user-attachments/assets/6514ecfc-1317-4998-8d92-fa53b482b18b" />
 
 1. Copy the command below inside the "quotes" (including the space at the end of prep):
 ```
@@ -48,8 +87,6 @@ prep /Users/YOURUSERNAME/Downloads/OneCommand.command
 
 3. Type your password and hit Enter (password will be invisible).
 4. The command file should now open as usual simply by double clicking it.
-
-Done!
 
 ------------------------------------------
 
