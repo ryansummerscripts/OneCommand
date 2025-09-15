@@ -1,8 +1,12 @@
 # OneCommand
 One command to rule them all
 
+<div align="center">
 <img width="745" height="495" alt="OneCommand_v1 0_(Full)" src="https://github.com/user-attachments/assets/09456e63-6667-434d-a13f-216a90431c69" />
+</div>
+<div align="center">
 <img width="745" height="495" alt="OneCommand_v1 0_(Lite)" src="https://github.com/user-attachments/assets/5bd110cb-a7de-4537-bb75-c7561a7d22bc" />
+</div>
 
 ------------------------------------------
 
@@ -53,7 +57,9 @@ terminal interface. Containing over 250+ commands in one, its purpose is to help
 
 By default, macOS quarantines unsigned files downloaded from the internet. If this command script cannot be opened simply by double-clicking it, you can remove its quarantine attributes & sign it.
 
+<div align="center">
 <img width="260" height="262" alt="GateKeeper msg" src="https://github.com/user-attachments/assets/6514ecfc-1317-4998-8d92-fa53b482b18b" />
+</div>
 
 1. Copy the command below inside the "quotes" (including the space at the end of prep):
 ```
@@ -106,3 +112,22 @@ Facts:
 - Distribution without paying Apple: You can still share scripts, packages, or apps, but users must manually bypass quarantine (right-click → Open, strip with xattr, or allow via Privacy & Security).
 
 So: free = always quarantined, user has to override. Paid developer = can notarize, quarantine cleared automatically.
+
+------------------------------------------
+
+▶️ Running Instructions:
+
+Simply double click the command file. It will then open Terminal and display the Main Menu. Choose a number, press Enter to continue, and follow the on screen instructions.
+
+· To go back a step in any function/menu item, press B + Enter.
+· To return to the main menu at any point, press Q + Enter.
+· To interrupt any output or password prompts, press ^C (Control + C).
+· To exit the script, press ^C at the Main Menu.
+
+Feel free and drop the .command file in your Applications folder, drag it to the dock, or even pin it directly to Finder by command + dragging it (Notice the 🛠️).
+
+<div align="center">
+  <img width="536" height="344" alt="PinToDock" src="https://github.com/user-attachments/assets/4fabe1c2-16c3-43b8-bd79-d705dd29272b" />
+</div>
+
+
