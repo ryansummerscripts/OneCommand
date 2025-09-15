@@ -129,5 +129,3 @@ Feel free and drop the .command file in your Applications folder, drag it to the
 <div align="center">
   <img width="536" height="344" alt="PinToDock" src="https://github.com/user-attachments/assets/4fabe1c2-16c3-43b8-bd79-d705dd29272b" />
 </div>
-
-
