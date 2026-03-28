@@ -2,12 +2,24 @@
 OneCommand
 </h1>
 
-<p align="center">
-https://shop.ryansummer.com/p/onecommand/
-</p>
+<div align="center">
+<p>Full Version (Paid)</p>
+</div>
+
+<div align="center">
+<p>https://shop.ryansummer.com/p/onecommand/</p>
+</div>
 
 <div align="center">
 	<img width="892" height="480" alt="OneCommand" src="https://github.com/user-attachments/assets/5f12e0a7-3d91-4db8-950c-fcd094afbd7b" />
+</div>
+
+<div align="center">
+<p>Lite Version (Free)</p>
+</div>
+
+<div align="center">
+<p>https://github.com/ryansummerscripts/OneCommand</p>
 </div>
 
 <div align="center">
@@ -21,11 +33,15 @@ https://shop.ryansummer.com/p/onecommand/
 </h3>
 
 <p align="center">
-<em>[Available as a free (Lite) version or a paid (Full) version - pictured above]</em>
+Available as a free (Lite) version here on github or a paid (Full) version - available <a href="https://shop.ryansummer.com/p/onecommand/">here</a>
 </p>
 
 <p align="center">
-<strong>Latest Versions:</strong><br>v2.1 (Full)
+[Use code <strong>GIT40OFF</strong> until April 15th 2026, 11:59pm PST]
+</p>
+
+<p align="center">
+<strong>Latest Versions:</strong><br>v2.1 (Full)<br>SHA-256: b6dddfd38b0d2a46dc20e4b7a8a637b3695a8b6b5660dd240c9050b1b67b3fc9
 </p>
 
 <p align="center">
@@ -33,7 +49,7 @@ https://shop.ryansummer.com/p/onecommand/
 </p>
 
 <p align="center">
-<br>v2.1 (Lite)
+<br>v2.1 (Lite)<br>SHA-256: af4d81b5927f155648a1099c687be1d909c8a00c94eacda973bae38b1dd87b4b
 </p>
 
 <p align="center">
@@ -130,7 +146,7 @@ It bridges the gap between casual users and power users, replacing the need to r
 <h2 align="center">Removing Quarantine</h2>
 
 <p>
-By default, macOS flags &amp; quarantines unsigned files downloaded from the internet, preventing this from being ran simply by double clicking it.
+By default, macOS flags &amp; quarantines unsigned files downloaded from the internet, preventing this from being ran simply by double clicking it.<em>(Sorry, we are not yet in the Apple Developer program)</em>.
 </p>
 
 <div align="center">
