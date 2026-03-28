@@ -1,17 +1,13 @@
-<div align="center">
-<h1>
+<h1 align="center">
 OneCommand
 </h1>
-</div>
 
-<div align="center">
-<p>https://shop.ryansummer.com/p/onecommand/</p>
-</div>
+<p align="center">
+https://shop.ryansummer.com/p/onecommand/
+</p>
 
 <div align="center">
 	<img width="892" height="480" alt="OneCommand" src="https://github.com/user-attachments/assets/5f12e0a7-3d91-4db8-950c-fcd094afbd7b" />
-<div align="center">
-
 </div>
 
 <div align="center">
@@ -228,7 +224,7 @@ If you already downloaded OneCommand, you'll no longer need to manually paste th
 
 <h2 align="center">Storage</h2>
 
-<p>
+<p align="center">
 You can store the 'OneCommand.command' file (or its entire folder), virtually anywhere you'd like.
 </p>
 
