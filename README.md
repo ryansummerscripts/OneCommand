@@ -21,10 +21,6 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<em>[Use code <strong>GIT40OFF</strong> until April 15th 2026, 11:59pm PST]</em>
-</p>
-
-<p align="center">
 <strong>Latest Versions:</strong><br>v2.1 (Full)<br>SHA-256: b6dddfd38b0d2a46dc20e4b7a8a637b3695a8b6b5660dd240c9050b1b67b3fc9
 </p>
 
