@@ -1,151 +1,237 @@
-# OneCommand (Lite)
-One command to rule them all
+<hr>
 
-<div align="center">
-<p>Full Version (Paid)</p>
-</div>
+<h3 align="center">
+<br>One command to rule them all<br>
+</h3>
 
-<div align="center">
-<p>https://shop.ryansummer.com/p/onecommand/</p>
-</div>
+<p align="center">
+<em>[Available as a free (Lite) version or a paid (Full) version - pictured above]</em>
+</p>
 
-<div align="center">
-<img width="745" height="495" alt="OneCommand_v1 0_(Full)" src="https://github.com/user-attachments/assets/09456e63-6667-434d-a13f-216a90431c69" />
-</div>
+<p align="center">
+<strong>Latest Versions:</strong><br>v2.1 (Full)
+</p>
 
-<div align="center">
-<p>Lite Version (Free)</p>
-</div>
+<p align="center">
+<a href="https://shop.ryansummer.com/onecommand-release-notes/"><strong>Release Notes</strong></a>
+</p>
 
-<div align="center">
-<p>https://github.com/ryansummerscripts/OneCommand</p>
-</div>
+<p align="center">
+<br>v2.1 (Lite)
+</p>
 
-<div align="center">
-<img width="745" height="495" alt="OneCommand_v1 0_(Lite)" src="https://github.com/user-attachments/assets/5bd110cb-a7de-4537-bb75-c7561a7d22bc" />
-</div>
+<p align="center">
+<a href="https://shop.ryansummer.com/onecommand-lite-release-notes/"><strong>Release Notes</strong></a>
+</p>
 
-------------------------------------------
-
+<p align="center">
 Tested on:
+</p>
 
-✅ macOS Monterey 12 through Tahoe 26
+<p align="center">
+✅ macOS Monterey 12 through Tahoe 26.4<br>✅ Intel &amp; Apple Silicon<br>
+</p>
 
-✅ Intel & Apple Silicon
+<p align="center">
+<strong>For more screenshots, see <a href="https://app.box.com/s/vfbb2dk8ygluafnicis16u54j8xg3eqh">here</a></strong>
+</p>
 
-------------------------------------------
+<hr>
 
-ℹ️ **Introduction:**
+<h3>Contents</h3>
 
-**OneCommand** is a macOS utility script that provides a comprehensive set of
-system administration and file management tools through an interactive
-terminal interface. Containing over 250+ commands in one, its purpose is to help automate tasks and control macOS in ways that can't easily (or sometimes at all) be done through a GUI.
+<ul>
+    <li>ℹ️ <a href="#oc-introduction">Introduction</a></li>
+    <li>🧼 <a href="#oc-removing-quarantine">Removing Quarantine</a></li>
+    <li>▶️ <a href="#oc-running-instructions">Running Instructions</a></li>
+    <li>⬆️ <a href="#oc-upgrading-one-command">Upgrading OneCommand</a></li>
+    <li>📥 <a href="#oc-storage">Storing OneCommand</a></li>
+</ul>
 
-**Core Functionality**
-  - **File Security & Permissions:** Remove quarantine flags, change permissions,
-    modify ownership
-  - **Code Signing:** Sign applications and bundles with ad-hoc signatures
-  - **Hash Generation:** Generate SHA256 hashes for files and bundles
-  - **Package Management:** Batch install .pkg files
-  - **Disk Image Tools:** Create/resize disk images and make macOS installers
-  - **System Utilities:** DNS management, network testing, system information
-  - **macOS Preferences:** Configure various default system settings and behaviors
-  - **Difference Tracker:** Track differences/changes to the file system
-    
+<hr>
 
-**Architecture**
-  - **Interactive menu-driven interface with navigation controls**
-  - **Modular function-based design with 20 utility functions**
-  - **Color-coded output using ANSI escape sequences**
-  - **Error handling and interruption support**
-  - **Support for drag-and-drop file operation**
-    
+<div id="oc-introduction"></div>
 
-**Key Design Patterns**
-  - **Global navigation system** (back/continue/interrupt/quit)
-  - **Consistent error handling and retry mechanisms**
-  - **Automatic Terminal window resizing when displaying large output**
-  - **Modular function organization with clear separation of concerns**
-  - **User-friendly prompts and status reporting**
+<h1 align="center">ℹ️</h1>
 
-------------------------------------------
+<h2 align="center">Introduction</h2>
 
-**De-Quarantining & signing OneCommand**
+<p>
+<strong>OneCommand</strong> is a menu-driven command line tool that runs in macOS's Terminal app, giving you access to powerful system features that are hidden, missing, or simply inaccessible through the GUI or App Store apps.
+</p>
+<p>
+macOS has a wealth of capability locked behind the Terminal - but recalling and managing hundreds of commands isn't practical for most people.
+</p>
+<p>
+OneCommand solves this by wrapping over 500 commands into a single, navigable interface that feels approachable whether you've never opened Terminal before or use it every day.
+</p>
+<p>
+It bridges the gap between casual users and power users, replacing the need to remember syntax with an intuitive, keyboard-driven experience - without ever leaving the Terminal.
+</p>
 
-By default, macOS quarantines unsigned files downloaded from the internet. If this command script cannot be opened simply by double-clicking it, you can remove its quarantine attributes & sign it.
+<p>Here are some of its main features:</p>
+
+<p><strong>Core Functionality</strong></p>
+
+<ul>
+    <li><strong>File Management</strong>: Manage/view quarantine, code signatures, extended attributes, permissions, binary architectures, create symlinks</li>
+    <li><strong>Privacy &amp; Security</strong>: Generate file hashes, audit file types, manage the TCC database, manage the system's hosts file, test a machine's isolation/exposure status</li>
+    <li><strong>System Utilities</strong>: DNS management, network testing, system information, manage Time Machine snapshots, monitor system activity</li>
+    <li><strong>macOS Preferences</strong>: Configure various default system settings and behaviors</li>
+    <li><strong>Diff Tracker</strong>: Track changes to the file system, preference files, websites, compare file differences</li>
+    <li><strong>Disk Image Tools</strong>: Create/resize disk images and make macOS installers</li>
+    <li><strong>Package Management</strong>: Batch-install .pkg files</li>
+    <li><strong>Settings</strong>: Manage all preferences and data saved by OneCommand</li>
+    <li><strong>Path Picker</strong>: Dedicated global prompt for providing file paths</li>
+</ul>
+
+<p><strong>Architecture</strong></p>
+
+<ul>
+    <li>Interactive menu-driven interface with <strong>navigation controls</strong></li>
+    <li>Modular function-based design with <strong>24+ utility functions</strong></li>
+    <li><strong>Color-coded output</strong> using ANSI escape sequences</li>
+    <li>Error handling and <strong>interruption support</strong></li>
+    <li>Support for <strong>drag-and-drop</strong> or <strong>Finder-dialog</strong> file operations</li>
+    <li>Persistent file-path and preference storage across sessions</li>
+</ul>
+
+<p><strong>Key Design Patterns</strong></p>
+
+<ul>
+    <li>Global navigation system (continue/back/previous/next/stop/path picker/settings/quit)</li>
+    <li>Consistent error handling and retry mechanisms</li>
+    <li>Automatic Terminal window resizing when displaying large output</li>
+    <li>User-friendly prompts and status reporting</li>
+</ul>
+
+<hr>
+
+<div id="oc-removing-quarantine"></div>
+
+<h1 align="center">🧼</h1>
+
+<h2 align="center">Removing Quarantine</h2>
+
+<p>
+By default, macOS flags &amp; quarantines unsigned files downloaded from the internet, preventing this from being ran simply by double clicking it.
+</p>
 
 <div align="center">
-<img width="260" height="262" alt="GateKeeper msg" src="https://github.com/user-attachments/assets/6514ecfc-1317-4998-8d92-fa53b482b18b" />
+<img src="https://media.sellfy.store/images/EbcIl29G/mpuE/gatekeeper_msg.png">
 </div>
 
-1. Copy the command below inside the "quotes" (including the space at the end of prep):
+<p>
+If you wish to run it by double clicking it, you can remove the quarantine attribute as well as give it the necessary permissions.
+</p>
+
+<p align="center">
+<em><strong>(See <a href="#oc-upgrading-one-command">below</a> for instructions on upgrading to a newer version of OneCommand)</strong></em>
+</p>
+
+<p>1. Copy the command below inside the quotes (including the space at the end of "prep "):</p>
+
 ```
 function prep() {
     for file in "$@"; do
-        sudo xattr -cr "$file"
-        sudo xattr -r -d com.apple.quarantine "$file"
-        sudo codesign --force --deep --sign - "$file"
-	sudo chmod +x "$file" 
+        sudo xattr -d com.apple.quarantine "$file"
+        sudo chmod +x "$file"
     done
 }
 
 prep 
 ```
 
-2. Paste the command into Terminal, drag and drop the "OneCommand.command" file onto the Terminal window, then press Enter.
+<p>2. Paste the command into Terminal and drag and drop the .command file onto the Terminal window, then press Enter.</p>
 
-Example:
+<p>Example:</p>
+
 ```
 function prep() {
     for file in "$@"; do
-        sudo xattr -cr "$file"
-        sudo xattr -r -d com.apple.quarantine "$file"
-        sudo codesign --force --deep --sign - "$file"
-	sudo chmod +x "$file" 
+        sudo xattr -d com.apple.quarantine "$file"
+        sudo chmod +x "$file"
     done
 }
 
 prep /Users/YOURUSERNAME/Downloads/OneCommand.command
 ```
 
-3. Type your password and hit Enter (password will be invisible).
-4. The command file should now open as usual simply by double clicking it.
+<p>3. Type your password and hit Enter again (password will be invisible).</p>
+<p>4. The command file should now open as usual when double clicking it.</p>
 
-------------------------------------------
+<hr>
 
-**Why do you need to do this?**
+<div id="oc-running-instructions"></div>
 
-Chat GPT says:
+<h1 align="center">▶️</h1>
 
-To sign and notarize in a way that bypasses Gatekeeper, you must enroll in the Apple Developer Program, which costs $99 USD per year.
+<h2 align="center">Running Instructions</h2>
 
-Facts:
-- Free Apple IDs can code sign ad-hoc (codesign -s -) or with a personal signing certificate, but those signatures are not trusted by Gatekeeper. They will not clear quarantine.
+<p>
+Simply double click the command file. It will then open Terminal and display the Main Menu. Choose a number, press <strong>Enter</strong> to continue, and follow the on-screen prompts.
+</p>
 
-- Only Developer ID Application/Installer certificates issued through a paid Developer Program account can produce binaries and packages that are trusted system-wide outside the Mac App Store.
+<p>Some of the navigation controls include:</p>
 
-- Notarization (Apple scanning and stapling a ticket to your binary/package) also requires a paid Developer ID. Without notarization, even a valid Developer ID signature will trigger warnings on modern macOS versions.
+<ul>
+    <li><strong>B:</strong> <strong>Go back</strong> a step in any menu.</li>
+    <li><strong>Q:</strong> <strong>Return</strong> to the main menu at any point.</li>
+    <li><strong>^C:</strong> <strong>Interrupt/Stop</strong> any output or password prompts or <strong>exit the script</strong> when at the Main Menu <em>(also used to go back in most cases)</em>.</li>
+    <li><strong>A/Z:</strong> Navigate to the <strong>next</strong> or <strong>previous</strong> menu/option (where available).</li>
+    <li><strong>S:</strong> Quickly jump in and out of <strong>Settings</strong> while preserving your current location</li>
+    <li><strong>P:</strong> Quickly jump in and out of <strong>Path Picker</strong> while preserving your current location</li>
+</ul>
 
-- Distribution without paying Apple: You can still share scripts, packages, or apps, but users must manually bypass quarantine (right-click → Open, strip with xattr, or allow via Privacy & Security).
+<hr>
 
-So: free = always quarantined, user has to override. Paid developer = can notarize, quarantine cleared automatically.
+<div id="oc-upgrading-one-command"></div>
 
-------------------------------------------
+<h1 align="center">⬆️</h1>
 
-▶️ Running Instructions:
+<h2 align="center">Upgrading OneCommand</h2>
 
-Simply double click the command file. It will then open Terminal and display the Main Menu. Choose a number, press Enter to continue, and follow the on screen instructions.
+<p align="center">
+If you already downloaded OneCommand, you'll no longer need to manually paste the <a href="#oc-removing-quarantine">remove quarantine</a> command above when downloading a new version. You can simply use the built-in upgrade option to automate this process by doing the following:
+</p>
 
-· To go back a step in any function/menu item, press B + Enter.
+<p>1. Choose the menu item: <strong>🕹️ Command Center</strong>.</p>
+<p>2. Select option 4: <strong>⬆️ Upgrade OneCommand</strong>.</p>
+<p>3. Provide your new OneCommand.command file, press Enter, type password, and Enter again.</p>
+<p>4. Done. Press Enter to launch the new OneCommand file.</p>
 
-· To return to the main menu at any point, press Q + Enter.
+<hr>
 
-· To interrupt any output or password prompts, press ^C (Control + C).
+<div id="oc-storage"></div>
 
-· To exit the script, press ^C at the Main Menu.
+<h1 align="center">📥</h1>
 
-Feel free and drop the .command file in your Applications folder, drag it to the dock, or even pin it directly to Finder by command + dragging it (Notice the 🛠️).
+<h2 align="center">Storage</h2>
+
+<p>
+You can store the 'OneCommand.command' file (or its entire folder), virtually anywhere you'd like.
+</p>
+
+<p align="center">Here are some common examples:</p>
+
+<ul>
+    <li>Applications folder</li>
+    <li>Desktop</li>
+    <li>Drag it to the Dock</li>
+    <li>iCloud Drive</li>
+    <li>Pin it directly to Finder <em>(by command + dragging it - notice the 🛠️ below)</em></li>
+</ul>
 
 <div align="center">
-  <img width="536" height="344" alt="PinToDock" src="https://github.com/user-attachments/assets/4fabe1c2-16c3-43b8-bd79-d705dd29272b" />
+<img src="https://media.sellfy.store/images/EbcIl29G/eaSS/pintodock.png">
 </div>
+
+<hr>
+
+<p align="center">
+If you have any issues, suggestions or feedback, don't hesitate to <a href="https://shop.ryansummer.com/contact/">reach out</a>.
+</p>
+
+<p align="center">Enjoy!</p>
+
+<hr>
