@@ -3,23 +3,7 @@ OneCommand
 </h1>
 
 <div align="center">
-<p>Full Version (Paid)</p>
-</div>
-
-<div align="center">
-<p>https://shop.ryansummer.com/p/onecommand/</p>
-</div>
-
-<div align="center">
 	<img width="892" height="480" alt="OneCommand" src="https://github.com/user-attachments/assets/5f12e0a7-3d91-4db8-950c-fcd094afbd7b" />
-</div>
-
-<div align="center">
-<p>Lite Version (Free)</p>
-</div>
-
-<div align="center">
-<p>https://github.com/ryansummerscripts/OneCommand</p>
 </div>
 
 <div align="center">
@@ -33,11 +17,11 @@ OneCommand
 </h3>
 
 <p align="center">
-Available as a free (Lite) version here on github or a paid (Full) version - available <a href="https://shop.ryansummer.com/p/onecommand/">here</a>
+Available as a free (Lite) version here on github or a paid (Full) version available <a href="https://shop.ryansummer.com/p/onecommand/">here</a>
 </p>
 
 <p align="center">
-[Use code <strong>GIT40OFF</strong> until April 15th 2026, 11:59pm PST]
+<em>[Use code <strong>GIT40OFF</strong> until April 15th 2026, 11:59pm PST]</em>
 </p>
 
 <p align="center">
@@ -146,7 +130,7 @@ It bridges the gap between casual users and power users, replacing the need to r
 <h2 align="center">Removing Quarantine</h2>
 
 <p>
-By default, macOS flags &amp; quarantines unsigned files downloaded from the internet, preventing this from being ran simply by double clicking it.<em>(Sorry, we are not yet in the Apple Developer program)</em>.
+By default, macOS flags &amp; quarantines unsigned files downloaded from the internet, preventing this from being ran simply by double clicking it. <em>(Sorry, we are not yet in the Apple Developer program)</em>
 </p>
 
 <div align="center">
