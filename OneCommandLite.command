@@ -4,7 +4,7 @@
 # | (_) | ' \/ -_) (__/ _ \ '  \| '  \/ _` | ' \/ _` |
 #  \___/|_||_\___|\___\___/_|_|_|_|_|_\__,_|_||_\__,_|
 #
-# Version: 2.1 (Lite)
+# Version: 2.1.1 (Lite)
 # by Ryan Summer
 # https://shop.ryansummer.com/p/onecommand
 
@@ -44,6 +44,7 @@ DisableColoredText=false
 DisableSavedPathEncryption=false
 SudoKeepAliveOnStartUp=false
 DisableWelcomeText_QuickMenus=false
+HideIncompatible_macOS_Preferences=false
 # nav flags
 used_keyboard_shortcut_s=false
 used_keyboard_shortcut_p=false
@@ -52,21 +53,67 @@ came_from_main_menu=false
 current_main_menu_choice=""
 current_sub_menu_choice=""
 MAIN_MENU_ITEMS_TOTAL=10
-# Detect macOS Version for the following:
-# - LibreSSL 3.3 (for saved paths enc.) (requires Ventura or later)
+# --- Store configuration details for certain functions -----------------------
+# --- Detect OS version -------------------------------------------------------
 product_version=$(sw_vers -productVersion)
 os_vers=( ${product_version//./ } )
 MACOS_MAJOR="${os_vers[0]}"
-# MACOS_MINOR="${os_vers[1]}"
-# MACOS_PATCH="${os_vers[2]}"
-# os_vers_build=$(sw_vers -buildVersion)
+MACOS_MINOR="${os_vers[1]}"
+MACOS_PATCH="${os_vers[2]:-0}"
+# os_vers_build=$(sw_vers -buildVersion)    # not needed
+# --- Detect Architecture (Apple Silicon vs Intel) ----------------------------
+ARCH_TYPE=$(uname -m)
+# --- Detect device type (to grey-out irrelevant macOS preferences) -----------
+SP_HW_INFO=$(system_profiler SPHardwareDataType)
+# SP_SW_INFO=$(system_profiler SPSoftwareDataType)    # not needed
+model_id=$(sysctl -n hw.model 2>/dev/null)    # no longer reliable to detect laptops (e.g., Mac17,2 is a MacBook Pro)
+model_name=$(sysctl -n hw.product 2>/dev/null)    # no longer reliable to detect laptops (e.g., Mac17,2 is a MacBook Pro)
+battery_info=$(ioreg -rd1 -c AppleSmartBattery -r)    # Without -d1, ioreg recurses deeply into the whole tree. On slow/busy machines this can take a noticeable moment.
+device_check_1=""
+device_check_2=""
+DEVICE_TYPE=""
+# --- Detect laptop vs desktop (method 1) -------------------------------------
+if echo "$SP_HW_INFO" | grep -iqE 'virtual|vmware|parallels|qemu|virtualbox|kvm|xen|bochs|bhyve'; then
+    device_check_1="vm"
+# elif echo "$SP_HW_INFO" | grep -q "Book"; then
+elif echo "$SP_HW_INFO" | grep -q "Model Name:.*Book"; then
+    device_check_1="laptop"
+else
+    device_check_1="desktop"
+fi
+# --- Detect laptop vs desktop (method 2) -------------------------------------
+if echo "$battery_info" | grep -q '"BatteryInstalled" = Yes'; then
+    device_check_2="laptop"
+elif echo "$battery_info" | grep -q '"BatteryInstalled" = No'; then
+    device_check_2="desktop"
+else
+    # Class absent — could be VM or a desktop with no battery controller
+    # Let method 1 be the tiebreaker; mark as inconclusive here
+    device_check_2="$device_check_1"   # defer, won't cause "unknown" below
+fi
+# --- Compare both methods ----------------------------------------------------
+if [[ "$device_check_1" == "$device_check_2" ]]; then
+    DEVICE_TYPE="$device_check_1"
+else
+    DEVICE_TYPE="unknown"
+fi
+# --- Detect Architecture (Apple Silicon vs Intel) ----------------------------
+if [[ "$ARCH_TYPE" == "arm64" ]]; then
+    # SP_PROCESSOR_NAME=$(echo "$SP_HW_INFO" | grep "Chip" | awk -F': ' '{print $2}')
+    SP_PROCESSOR_NAME=$(echo "$SP_HW_INFO" | grep -m 1 "Chip" | awk -F': ' '{print $2}')
+elif [[ "$ARCH_TYPE" == "x86_64" ]]; then
+    SP_PROCESSOR_NAME=$(echo "$SP_HW_INFO" | grep "Processor Name" | awk -F': ' '{print $2}')
+fi
+# SP_MODEL_NAME=$(echo "$SP_HW_INFO" | grep "Model Name" | awk -F': ' '{print $2}')
+SP_MODEL_NAME=$(echo "$SP_HW_INFO" | grep -m 1 "Model Name" | awk -F': ' '{print $2}')
+# Build custom display output
+system_info_for_display="${GY}System Info: macOS $product_version | $SP_PROCESSOR_NAME $SP_MODEL_NAME${NC}"
 # --- Store Permission-Related Info -------------------------------------------
 # Get currently logged-in user
 REAL_USER=$(stat -f "%Su" /dev/console)
 uid=$(id -u)
 ADMIN_STATUS=$(if id -Gn | grep -q '\badmin\b'; then echo "✅"; else echo "❌"; fi)
 # --- Saved Paths Enc Key -----------------------------------------------------
-SAVED_PATHS_FILE="${HOME}/.OneCommand/saved_paths.enc"
 # Derives a machine+user specific key — no password prompt, but not portable
 _get_paths_enc_key() {
     local hw_uuid
@@ -130,6 +177,7 @@ load_all_prefs() {
     val=$(load_pref "DisableSavedPathEncryption");                             [[ -n "$val" ]] && DisableSavedPathEncryption="$val"
     val=$(load_pref "SudoKeepAliveOnStartUp");                                 [[ -n "$val" ]] && SudoKeepAliveOnStartUp="$val"
     val=$(load_pref "DisableWelcomeText_QuickMenus");                          [[ -n "$val" ]] && DisableWelcomeText_QuickMenus="$val"
+    val=$(load_pref "HideIncompatible_macOS_Preferences");                     [[ -n "$val" ]] && HideIncompatible_macOS_Preferences="$val"
 
     # Future prefs just add lines here:
     # val=$(load_pref "some_other_pref")
@@ -167,6 +215,7 @@ reset_all_prefs_to_default() {
     save_paths_to_file
     SudoKeepAliveOnStartUp=false
     DisableWelcomeText_QuickMenus=false
+    HideIncompatible_macOS_Preferences=false
 }
 _count_saved_prefs() {
     [[ ! -f "$PREFS_FILE" ]] && echo 0 && return
@@ -177,6 +226,7 @@ _count_saved_prefs() {
     # grep -c "^[^#[:space:]].*=." "$PREFS_FILE" 2>/dev/null
 }
 # --- Enc/Save/Load/Dec Saved Paths -------------------------------------------
+SAVED_PATHS_FILE="${HOME}/.OneCommand/saved_paths.enc"
 # pbkdf2 requires LibreSSL 3.3+ — available from macOS 13 (Ventura) onwards
 if [[ "$MACOS_MAJOR" -ge 13 ]]; then
     OPENSSL_KDF_FLAGS="-pbkdf2"
@@ -504,7 +554,7 @@ echo_justified() {
     printf "%b%${spacing}s%b\n" "$left_text" "" "$right_text"
 }
 # --- ASCII Headers -----------------------------------------------------------
-display_OneCommand_header_for_80px() {
+display_OneCommand_header_for_95px() {
     echo -n "${BO}"
     cat <<'EOF'
                        ___            ___                              _ 
@@ -513,7 +563,7 @@ display_OneCommand_header_for_80px() {
                       \___/|_||_\___|\___\___/_|_|_|_|_|_\__,_|_||_\__,_|
 EOF
     echo -n "${NC}"
-    echo "                  ${BL}Created by Ryan Summer${NC}  |  ${BL}For macOS 12-26${NC}  |  ${BL}v2.1 (Lite)${NC}"
+    echo "                   ${BL}Created by Ryan Summer${NC} | ${BL}For macOS 12-26${NC} | ${BL}v2.1.1 (Lite)${NC}"
     echo
 }
 display_macos_preferences_header() {
@@ -527,7 +577,7 @@ EOF
     echo -n "${NC}"
     echo "                                               ${BL}For macOS 12-26${NC}"
 }
-display_Disk_Image_Utility_header_for_80px() {
+display_Disk_Image_Utility_header_for_95px() {
     echo -n "${BO}"
     cat <<'EOF'
                ___  _    _     ___                       _   _ _   _ _ _ _        
@@ -749,6 +799,7 @@ disable_sudo_keepalive() {
         _sudo_keepalive_pid=""
     fi
 }
+# --- Main Menu Display -------------------------------------------------------
 # Function to get menu item by index (simulates array access)
 get_menu_item() {
     local index=$1
@@ -1111,7 +1162,7 @@ quick_picker() {
             fi
         elif [[ "$used_keyboard_shortcut_s" == "true" ]]; then
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-            echo_justified "${BO}🛣️  Path Picker${NC} ${BK}${RE}[Quick Settings]${NC}" "${GY}(Use Q to jump back to previous menu)${NC}" "81"
+            echo_justified "${BO}🛣️  Path Picker${NC} ${BK}${RE}[Quick Settings]${NC}" "${GY}(Use Q to jump back to previous menu)${NC}" "96"
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
             echo "↩ Manage Saved Paths"
             echo
@@ -1119,7 +1170,7 @@ quick_picker() {
             echo
         elif [[ "$came_from_settings_manage_saved_paths_path_picker" == "true" ]]; then
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-            echo_justified "${BO}🛣️  Path Picker${NC} [Save New Paths]" "" "81"
+            echo_justified "${BO}🛣️  Path Picker${NC} [Save New Paths]" "" "96"
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
             echo "↩ Manage Saved Paths"
             echo
@@ -1127,7 +1178,7 @@ quick_picker() {
             echo
         elif [[ "$came_from_command_center_path_picker" == "true" ]]; then
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-            echo_justified "${BO}🛣️  Path Picker [Save New Paths]${NC}" "" "81"
+            echo_justified "${BO}🛣️  Path Picker [Save New Paths]${NC}" "" "96"
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
             echo "↩ Home [Command Center]"
             echo
@@ -1135,7 +1186,7 @@ quick_picker() {
             echo
         else # came from somewhere else
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
-            echo_justified "${BO}🛣️  Path Picker [Save New Paths]${NC}" "" "81"
+            echo_justified "${BO}🛣️  Path Picker [Save New Paths]${NC}" "" "96"
             echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
             echo "↩ Manage Saved Paths"
             echo
@@ -1497,7 +1548,7 @@ main_menu() {
         if [[ -z "$current_main_menu_choice" ]]; then
             resize_terminal 95 24
             clear
-            display_OneCommand_header_for_80px
+            display_OneCommand_header_for_95px
             echo
             echo_centered "${BO}Choose a task:${NC}"
             echo
@@ -1531,6 +1582,7 @@ main_menu() {
             main_menu_choice="$current_main_menu_choice"
             current_main_menu_choice=""
         fi
+
         case $main_menu_choice in
             0) quick_stats ;;
             1) speed_test ;;
@@ -1564,365 +1616,367 @@ function quick_stats() {
     # Formatting for ACL display
     local acl_username_color="$GR" acl_perms_color="$BL" acl_result_label="${GY}[None]${NC}" acl_title_label=""
 
-    # ─────────────────────────────────────────────────────────────────
-    # HELPERS
-    # ─────────────────────────────────────────────────────────────────
+    if true; then    # only used to quickly collapse functions below
+        # ─────────────────────────────────────────────────────────────────
+        # HELPERS
+        # ─────────────────────────────────────────────────────────────────
 
-    # Converts raw bytes to human-readable string.
-    # Uses bc if available, awk as fallback.
-    format_size() {
-        local bytes="$1"
-        if [[ -z "$bytes" || "$bytes" == "Unknown" ]]; then
-            echo "Unknown"
-            return
-        fi
-        if command -v bc >/dev/null 2>&1; then
-            if   (( bytes >= 1073741824 )); then echo "$(echo "scale=2; $bytes/1073741824" | bc) GB"
-            elif (( bytes >= 1048576    )); then echo "$(echo "scale=2; $bytes/1048576"    | bc) MB"
-            elif (( bytes >= 1024       )); then echo "$(echo "scale=2; $bytes/1024"       | bc) KB"
-            else echo "${bytes} B"
-            fi
-        else
-            awk -v bytes="$bytes" 'BEGIN {
-                if      (bytes >= 1073741824) printf "%.2f GB", bytes/1073741824
-                else if (bytes >= 1048576)    printf "%.2f MB", bytes/1048576
-                else if (bytes >= 1024)       printf "%.2f KB", bytes/1024
-                else                          printf "%d B",    bytes
-            }'
-        fi
-    }
-
-    # Returns raw byte count for a file.
-    # stat -f%z is macOS syntax; -c%s fallback covers Linux if ever needed.
-    get_file_size_bytes() {
-        local path="$1"
-        local size=""
-        size=$(stat -f%z "$path" 2>/dev/null)
-        [[ -z "$size" ]] && size=$(stat -c%s "$path" 2>/dev/null)
-        [[ -z "$size" ]] && size=$(du -sk "$path" 2>/dev/null | awk '{print $1 * 1024}')
-        echo "${size:-0}"
-    }
-
-    # Returns a formatted ACL string for user: entries, or 'None'.
-    # Called by _print_permissions — not printed directly.
-    # show_acl_owners(){}  # used at top of script under 'Shared Execution Functions"
-
-    # Formats an arch string (output of lipo -archs) into a colored display label.
-    format_arches_display() {
-        local arches_str="$1"
-        local arch_array=($arches_str)
-        local arch_count=${#arch_array[@]}
-
-        if [[ $arch_count -eq 1 ]]; then
-            local arch="${arch_array[0]}"
-            case "$arch" in
-                arm64|arm64e) echo "${GR}ARM Only${NC} ($arch)"   ;;
-                x86_64|i386)  echo "${BL}Intel Only${NC} ($arch)" ;;
-                *)             echo "${YE}Other${NC} ($arch)"      ;;
-            esac
-        else
-            echo "${MA}Universal${NC} ($arches_str)"
-        fi
-    }
-
-    # Returns 0 if the file is a Mach-O binary, 1 otherwise.
-    is_macho_file() {
-        file "$1" 2>/dev/null | grep -q "Mach-O"
-    }
-
-    # # Returns lipo -archs output for a file, with result caching.
-    # # Cache arrays must be declared in the parent function scope:
-    # #   local arch_cache_files=()
-    # #   local arch_cache_results=()
-    # get_archs_cached() {
-    #     local _file="$1"
-    #     local _idx=0
-
-    #     for cached_file in "${arch_cache_files[@]}"; do
-    #         if [[ "$cached_file" == "$_file" ]]; then
-    #             echo "${arch_cache_results[$_idx]}"
-    #             return 0
-    #         fi
-    #         (( _idx++ ))
-    #     done
-
-    #     local _archs
-    #     _archs=$(lipo -archs "$_file" 2>/dev/null)
-    #     arch_cache_files+=("$_file")
-    #     if [[ $? -eq 0 && -n "$_archs" ]]; then
-    #         arch_cache_results+=("$_archs")
-    #         echo "$_archs"
-    #         return 0
-    #     else
-    #         arch_cache_results+=("")
-    #         return 1
-    #     fi
-    # }
-
-    # Returns space-separated arch string for a file, with result caching.
-    # Uses `file` instead of `lipo` — no Xcode CLT required.
-    # Cache arrays must be declared in the parent function scope:
-    #   local arch_cache_files=()
-    #   local arch_cache_results=()
-    get_archs_cached() {
-        local _file="$1"
-        local _idx=0
-        for cached_file in "${arch_cache_files[@]}"; do
-            if [[ "$cached_file" == "$_file" ]]; then
-                echo "${arch_cache_results[$_idx]}"
-                [[ -n "${arch_cache_results[$_idx]}" ]] && return 0 || return 1
-            fi
-            (( _idx++ ))
-        done
-
-        local file_output
-        file_output=$(file "$_file" 2>/dev/null)
-
-        local _archs=""
-        if echo "$file_output" | grep -q "universal binary"; then
-            # e.g. "... [x86_64:Mach-O ...] [arm64:Mach-O ...]"
-            # Extract the arch token from each bracketed section
-            _archs=$(echo "$file_output" \
-                | grep -oE '\[[a-z0-9_]+[]:]' \
-                | tr -d '[' \
-                | tr -d ':' \
-                | tr -d ']' \
-                | tr '\n' ' ' \
-                | sed 's/ *$//')
-        else
-            # e.g. "foo: Mach-O 64-bit executable arm64"
-            local last_word
-            last_word=$(echo "$file_output" | awk '{print $NF}')
-            case "$last_word" in
-                arm64|arm64e|x86_64|i386) _archs="$last_word" ;;
-            esac
-        fi
-
-        arch_cache_files+=("$_file")
-        if [[ -n "$_archs" ]]; then
-            arch_cache_results+=("$_archs")
-            echo "$_archs"
-            return 0
-        else
-            arch_cache_results+=("")
-            return 1
-        fi
-    }
-
-    # Sets globals: SIGNATURE_STATUS, NEEDS_SIGNING, LAST_SIG_DETAIL, LAST_SIG_ASSESS.
-    # NOTE: uses a local variable named is_bundle=0 (shadows the is_bundle() function
-    # within this function's scope only — no impact on callers).
-    # get_signature_status_label() {}  # used at top of script under 'Shared Execution Functions"
-
-    # Resolves a bundle's main executable path and echoes it.
-    # Returns 1 (and prints nothing) if resolution fails.
-    # Shared by _hash_bundle and _print_arch — single source of truth.
-    _resolve_bundle_executable() {
-        local path="$1"
-        local bundle_plist="$path/Contents/Info.plist"
-        local executable_name
-        executable_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$bundle_plist" 2>/dev/null)
-
-        [[ -z "$executable_name" ]] && return 1
-
-        if   [[ -f "$path/Contents/MacOS/$executable_name" ]];   then echo "$path/Contents/MacOS/$executable_name"
-        elif [[ -f "$path/Versions/Current/$executable_name" ]]; then echo "$path/Versions/Current/$executable_name"
-        elif [[ -f "$path/$executable_name" ]];                  then echo "$path/$executable_name"
-        else return 1
-        fi
-    }
-
-    # ── Stat helpers ──────────────────────────────────────────────────
-    # All stat output uses $STAT_INDENT for leading whitespace.
-    # Set STAT_INDENT="" in shared config to remove all indenting globally.
-    # Signature detail sub-lines use double-indent (${STAT_INDENT}${STAT_INDENT}).
-
-    # Prints indented quarantine result line.
-    # Skipped for broken symlinks (caller's responsibility).
-    _print_quarantine_status() {
-        if is_quarantined "$1"; then
-            echo "${STAT_INDENT}🛡️  ${HC}Quarantine Status:${NC} ${RE}[Quarantined]${NC}"
-            # quarantine_removal_needed=1
-        else
-            echo "${STAT_INDENT}🛡️  ${HC}Quarantine Status:${NC} ${GR}[Not Quarantined]${NC}"
-        fi
-    }
-
-    # Prints indented permissions line: owner:group  sym  [octal]  ACLs (if any).
-    # Checked on bundle root, not inner executable.
-    # Skipped for broken symlinks (caller's responsibility).
-    _print_permissions() {
-        local path="$1"
-        local perms_sym_raw perms_num perms_sym_fmt owner group acl_info
-        perms_sym_raw=$(stat -f "%Sp" "$path" 2>/dev/null)
-        perms_num=$(stat -f "%A"  "$path" 2>/dev/null)
-        perms_sym_fmt="${perms_sym_raw:1:3}|${perms_sym_raw:4:3}|${perms_sym_raw:7:3}"
-        owner=$(stat -f "%Su" "$path" 2>/dev/null)
-        group=$(stat -f "%Sg" "$path" 2>/dev/null)
-        acl_info=$(show_acl_owners "$path" "$acl_username_color" "$acl_perms_color" "$acl_result_label" "$acl_title_label")
-        # echo "${STAT_INDENT}${GY}$owner:$group${NC} ${BL}$perms_sym_fmt${NC} ${BL}[$perms_num]${NC}${acl_info:+ $acl_info}"
-        echo "${STAT_INDENT}👥 ${HC}Owner:Group:${NC} ${GR}$owner:$group${NC}"
-        echo "${STAT_INDENT}🔐 ${HC}Permissions:${NC} ${GR}$perms_sym_fmt${NC} ${GY}[$perms_num]${NC}"
-        echo "${STAT_INDENT}🗝️  ${HC}ACLs:${NC} ${acl_info}"
-    }
-
-    # Prints indented xattr list, or [None] if absent.
-    # Lists all xattrs — quarantine is included here if present.
-    # Skipped for broken symlinks (caller's responsibility).
-    _print_xattrs() {
-        local path="$1"
-        local xattrs
-        xattrs=$(xattr "$path" 2>/dev/null | tr '\n' ',' | sed 's/,$//; s/,/, /g')
-        if [[ -n "$xattrs" ]]; then
-            echo "${STAT_INDENT}🏷️  ${HC}Xattrs:${NC} ${GR}${xattrs}${NC}"
-        else
-            echo "${STAT_INDENT}🏷️  ${HC}Xattrs: ${GY}[None]${NC}"
-        fi
-    }
-
-    # Prints indented true file type from the 'file' command (strips path prefix).
-    # Called for files and symlinks-to-files only — dirs and bundles are skipped
-    # since their type is already structurally known.
-    # Skipped for broken symlinks (caller's responsibility).
-    _print_file_type() {
-        local path="$1"
-        local file_type
-        file_type=$(file "$path" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//')
-        if [[ -n "$file_type" ]]; then
-            echo "${STAT_INDENT}🩻 ${HC}File Type:${NC} ${GR}${file_type}${NC}"
-        else
-            echo "${STAT_INDENT}🩻 ${HC}File Type:${NC} ${GY}[Unknown]${NC}"
-        fi
-    }
-
-    # Prints indented human-readable size.
-    # Dirs and bundles use du -sk (recursive total); files use get_file_size_bytes.
-    # Skipped for broken symlinks (caller's responsibility).
-    _print_size() {
-        local path="$1"
-        local size_bytes size
-        if [[ -d "$path" ]]; then
-            size_bytes=$(du -sk "$path" 2>/dev/null | awk '{print $1 * 1024}')
-        else
-            size_bytes=$(get_file_size_bytes "$path")
-        fi
-        size=$(format_size "${size_bytes:-0}")
-        echo "${STAT_INDENT}📏 ${HC}Size:${NC} ${GR}${size}${NC}"
-    }
-
-    # Prints indented binary architecture info.
-    # Accepts any path type — resolves bundle executables internally via
-    # _resolve_bundle_executable. Non-Mach-O files print [Not a binary].
-    # Regular (non-bundle) dirs are skipped — caller's responsibility not to call.
-    # Skipped for broken symlinks (caller's responsibility).
-    # Requires in parent function scope:
-    #   local arch_cache_files=()
-    #   local arch_cache_results=()
-    #   local arm64_count=0 x86_64_count=0 universal_count=0 other_arch_count=0
-    _print_arch() {
-        local path="$1"
-        local target_path="$path"
-
-        if [[ -d "$path" ]] && is_bundle "$path"; then
-            target_path=$(_resolve_bundle_executable "$path")
-            if [[ -z "$target_path" ]]; then
-                echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} ${GY}N/A - executable not resolved${NC}"
+        # Converts raw bytes to human-readable string.
+        # Uses bc if available, awk as fallback.
+        format_size() {
+            local bytes="$1"
+            if [[ -z "$bytes" || "$bytes" == "Unknown" ]]; then
+                echo "Unknown"
                 return
             fi
-        fi
+            if command -v bc >/dev/null 2>&1; then
+                if   (( bytes >= 1073741824 )); then echo "$(echo "scale=2; $bytes/1073741824" | bc) GB"
+                elif (( bytes >= 1048576    )); then echo "$(echo "scale=2; $bytes/1048576"    | bc) MB"
+                elif (( bytes >= 1024       )); then echo "$(echo "scale=2; $bytes/1024"       | bc) KB"
+                else echo "${bytes} B"
+                fi
+            else
+                awk -v bytes="$bytes" 'BEGIN {
+                    if      (bytes >= 1073741824) printf "%.2f GB", bytes/1073741824
+                    else if (bytes >= 1048576)    printf "%.2f MB", bytes/1048576
+                    else if (bytes >= 1024)       printf "%.2f KB", bytes/1024
+                    else                          printf "%d B",    bytes
+                }'
+            fi
+        }
 
-        if ! is_macho_file "$target_path"; then
-            echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} ${GY}Not a binary${NC}"
-            return
-        fi
+        # Returns raw byte count for a file.
+        # stat -f%z is macOS syntax; -c%s fallback covers Linux if ever needed.
+        get_file_size_bytes() {
+            local path="$1"
+            local size=""
+            size=$(stat -f%z "$path" 2>/dev/null)
+            [[ -z "$size" ]] && size=$(stat -c%s "$path" 2>/dev/null)
+            [[ -z "$size" ]] && size=$(du -sk "$path" 2>/dev/null | awk '{print $1 * 1024}')
+            echo "${size:-0}"
+        }
 
-        local lipo_output
-        lipo_output=$(get_archs_cached "$target_path")
-        if [[ $? -ne 0 || -z "$lipo_output" ]]; then
-            echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} ${GY}N/A${NC}"
-            return
-        fi
+        # Returns a formatted ACL string for user: entries, or 'None'.
+        # Called by _print_permissions — not printed directly.
+        # show_acl_owners(){}  # used at top of script under 'Shared Execution Functions"
 
-        local arch_array=($lipo_output)
-        local arch_count=${#arch_array[@]}
-        if [[ $arch_count -eq 1 ]]; then
-            case "${arch_array[0]}" in
-                arm64|arm64e) (( arm64_count++      )) ;;
-                x86_64|i386)  (( x86_64_count++     )) ;;
-                *)             (( other_arch_count++ )) ;;
-            esac
-        else
-            (( universal_count++ ))
-        fi
+        # Formats an arch string (output of lipo -archs) into a colored display label.
+        format_arches_display() {
+            local arches_str="$1"
+            local arch_array=($arches_str)
+            local arch_count=${#arch_array[@]}
 
-        local arches_display
-        arches_display=$(format_arches_display "$lipo_output")
-        echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} $arches_display"
-    }
+            if [[ $arch_count -eq 1 ]]; then
+                local arch="${arch_array[0]}"
+                case "$arch" in
+                    arm64|arm64e) echo "${GR}ARM Only${NC} ($arch)"   ;;
+                    x86_64|i386)  echo "${BL}Intel Only${NC} ($arch)" ;;
+                    *)             echo "${YE}Other${NC} ($arch)"      ;;
+                esac
+            else
+                echo "${MA}Universal${NC} ($arches_str)"
+            fi
+        }
 
-    # Prints indented signature status + detail sub-lines
-    # (Identifier, TeamIdentifier, Authority, Signature, Notarization Ticket).
-    # Detail sub-lines use double-indent (${STAT_INDENT}${STAT_INDENT}).
-    # For bundles, codesign runs on the bundle root.
-    # Skipped for broken symlinks (caller's responsibility).
-    # Requires in parent function scope:
-    #   local adhoc_signature_needed=0
-    _print_signature() {
-        local path="$1"
+        # Returns 0 if the file is a Mach-O binary, 1 otherwise.
+        is_macho_file() {
+            file "$1" 2>/dev/null | grep -q "Mach-O"
+        }
 
-        get_signature_status_label "$path"
+        # # Returns lipo -archs output for a file, with result caching.
+        # # Cache arrays must be declared in the parent function scope:
+        # #   local arch_cache_files=()
+        # #   local arch_cache_results=()
+        # get_archs_cached() {
+        #     local _file="$1"
+        #     local _idx=0
 
-        echo "${STAT_INDENT}✍️  ${HC}Signature:${NC} $SIGNATURE_STATUS"
+        #     for cached_file in "${arch_cache_files[@]}"; do
+        #         if [[ "$cached_file" == "$_file" ]]; then
+        #             echo "${arch_cache_results[$_idx]}"
+        #             return 0
+        #         fi
+        #         (( _idx++ ))
+        #     done
 
-        # [[ "$NEEDS_SIGNING" -eq 1 ]] && adhoc_signature_needed=1
+        #     local _archs
+        #     _archs=$(lipo -archs "$_file" 2>/dev/null)
+        #     arch_cache_files+=("$_file")
+        #     if [[ $? -eq 0 && -n "$_archs" ]]; then
+        #         arch_cache_results+=("$_archs")
+        #         echo "$_archs"
+        #         return 0
+        #     else
+        #         arch_cache_results+=("")
+        #         return 1
+        #     fi
+        # }
 
-        # Detail sub-lines — always shown in Quick Stats (no scan_depth gating).
-        # Double-indented so they nest visually under the sig: label.
-        local detail_lines
-        detail_lines=$(
-            {
-                echo "$LAST_SIG_DETAIL" | grep "^Identifier="       | grep -v "^TeamIdentifier="
-                echo "$LAST_SIG_DETAIL" | grep "^TeamIdentifier="
-                echo "$LAST_SIG_DETAIL" | grep "^Authority="
-                echo "$LAST_SIG_DETAIL" | grep "^Signature="
-                echo "$LAST_SIG_DETAIL" | grep "^Notarization Ticket="
-            } | grep -v "^$"
-        )
-        if [[ -n "$detail_lines" ]]; then
-            echo "${GY}$detail_lines${NC}" | sed "s/^/${STAT_INDENT}${STAT_INDENT}/"
-            # echo "$detail_lines" | sed 's/^/    /'
-        fi
-    }
+        # Returns space-separated arch string for a file, with result caching.
+        # Uses `file` instead of `lipo` — no Xcode CLT required.
+        # Cache arrays must be declared in the parent function scope:
+        #   local arch_cache_files=()
+        #   local arch_cache_results=()
+        get_archs_cached() {
+            local _file="$1"
+            local _idx=0
+            for cached_file in "${arch_cache_files[@]}"; do
+                if [[ "$cached_file" == "$_file" ]]; then
+                    echo "${arch_cache_results[$_idx]}"
+                    [[ -n "${arch_cache_results[$_idx]}" ]] && return 0 || return 1
+                fi
+                (( _idx++ ))
+            done
 
-    # Resolves, hashes, and prints a bundle's main executable.
-    # Refactored to use _resolve_bundle_executable.
-    # Prints only indented result line(s) — caller prints the name line.
-    _hash_bundle() {
-        local path="$1"
-        local executable_path
-        executable_path=$(_resolve_bundle_executable "$path")
+            local file_output
+            file_output=$(file "$_file" 2>/dev/null)
 
-        if [[ -z "$executable_path" ]]; then
+            local _archs=""
+            if echo "$file_output" | grep -q "universal binary"; then
+                # e.g. "... [x86_64:Mach-O ...] [arm64:Mach-O ...]"
+                # Extract the arch token from each bracketed section
+                _archs=$(echo "$file_output" \
+                    | grep -oE '\[[a-z0-9_]+[]:]' \
+                    | tr -d '[' \
+                    | tr -d ':' \
+                    | tr -d ']' \
+                    | tr '\n' ' ' \
+                    | sed 's/ *$//')
+            else
+                # e.g. "foo: Mach-O 64-bit executable arm64"
+                local last_word
+                last_word=$(echo "$file_output" | awk '{print $NF}')
+                case "$last_word" in
+                    arm64|arm64e|x86_64|i386) _archs="$last_word" ;;
+                esac
+            fi
+
+            arch_cache_files+=("$_file")
+            if [[ -n "$_archs" ]]; then
+                arch_cache_results+=("$_archs")
+                echo "$_archs"
+                return 0
+            else
+                arch_cache_results+=("")
+                return 1
+            fi
+        }
+
+        # Sets globals: SIGNATURE_STATUS, NEEDS_SIGNING, LAST_SIG_DETAIL, LAST_SIG_ASSESS.
+        # NOTE: uses a local variable named is_bundle=0 (shadows the is_bundle() function
+        # within this function's scope only — no impact on callers).
+        # get_signature_status_label() {}  # used at top of script under 'Shared Execution Functions"
+
+        # Resolves a bundle's main executable path and echoes it.
+        # Returns 1 (and prints nothing) if resolution fails.
+        # Shared by _hash_bundle and _print_arch — single source of truth.
+        _resolve_bundle_executable() {
+            local path="$1"
             local bundle_plist="$path/Contents/Info.plist"
             local executable_name
             executable_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$bundle_plist" 2>/dev/null)
-            if [[ -z "$executable_name" ]]; then
-                echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo:${NC} ${GY}[No CFBundleExecutable found]${NC}"
-            else
-                echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo:${NC} ${GY}[Executable not found: $executable_name]${NC}"
-            fi
-            return
-        fi
 
-        local rel_path="${executable_path#$path/}"
-        local hash_result
-        hash_result=$(shasum -a "$sha_algo" "$executable_path" 2>/dev/null | awk '{print $1}')
-        if [[ -n "$hash_result" ]]; then
-            echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo${NC} ${GY}($rel_path):${NC} ${GR}${hash_result}${NC}"
-        else
-            echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo${NC} ${GY}($rel_path): [N/A]${NC}"
-        fi
-    }
+            [[ -z "$executable_name" ]] && return 1
+
+            if   [[ -f "$path/Contents/MacOS/$executable_name" ]];   then echo "$path/Contents/MacOS/$executable_name"
+            elif [[ -f "$path/Versions/Current/$executable_name" ]]; then echo "$path/Versions/Current/$executable_name"
+            elif [[ -f "$path/$executable_name" ]];                  then echo "$path/$executable_name"
+            else return 1
+            fi
+        }
+
+        # ── Stat helpers ──────────────────────────────────────────────────
+        # All stat output uses $STAT_INDENT for leading whitespace.
+        # Set STAT_INDENT="" in shared config to remove all indenting globally.
+        # Signature detail sub-lines use double-indent (${STAT_INDENT}${STAT_INDENT}).
+
+        # Prints indented quarantine result line.
+        # Skipped for broken symlinks (caller's responsibility).
+        _print_quarantine_status() {
+            if is_quarantined "$1"; then
+                echo "${STAT_INDENT}🛡️  ${HC}Quarantine Status:${NC} ${RE}[Quarantined]${NC}"
+                # quarantine_removal_needed=1
+            else
+                echo "${STAT_INDENT}🛡️  ${HC}Quarantine Status:${NC} ${GR}[Not Quarantined]${NC}"
+            fi
+        }
+
+        # Prints indented permissions line: owner:group  sym  [octal]  ACLs (if any).
+        # Checked on bundle root, not inner executable.
+        # Skipped for broken symlinks (caller's responsibility).
+        _print_permissions() {
+            local path="$1"
+            local perms_sym_raw perms_num perms_sym_fmt owner group acl_info
+            perms_sym_raw=$(stat -f "%Sp" "$path" 2>/dev/null)
+            perms_num=$(stat -f "%A"  "$path" 2>/dev/null)
+            perms_sym_fmt="${perms_sym_raw:1:3}|${perms_sym_raw:4:3}|${perms_sym_raw:7:3}"
+            owner=$(stat -f "%Su" "$path" 2>/dev/null)
+            group=$(stat -f "%Sg" "$path" 2>/dev/null)
+            acl_info=$(show_acl_owners "$path" "$acl_username_color" "$acl_perms_color" "$acl_result_label" "$acl_title_label")
+            # echo "${STAT_INDENT}${GY}$owner:$group${NC} ${BL}$perms_sym_fmt${NC} ${BL}[$perms_num]${NC}${acl_info:+ $acl_info}"
+            echo "${STAT_INDENT}👥 ${HC}Owner:Group:${NC} ${GR}$owner:$group${NC}"
+            echo "${STAT_INDENT}🔐 ${HC}Permissions:${NC} ${GR}$perms_sym_fmt${NC} ${GY}[$perms_num]${NC}"
+            echo "${STAT_INDENT}🗝️  ${HC}ACLs:${NC} ${acl_info}"
+        }
+
+        # Prints indented xattr list, or [None] if absent.
+        # Lists all xattrs — quarantine is included here if present.
+        # Skipped for broken symlinks (caller's responsibility).
+        _print_xattrs() {
+            local path="$1"
+            local xattrs
+            xattrs=$(xattr "$path" 2>/dev/null | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+            if [[ -n "$xattrs" ]]; then
+                echo "${STAT_INDENT}🏷️  ${HC}Xattrs:${NC} ${GR}${xattrs}${NC}"
+            else
+                echo "${STAT_INDENT}🏷️  ${HC}Xattrs: ${GY}[None]${NC}"
+            fi
+        }
+
+        # Prints indented true file type from the 'file' command (strips path prefix).
+        # Called for files and symlinks-to-files only — dirs and bundles are skipped
+        # since their type is already structurally known.
+        # Skipped for broken symlinks (caller's responsibility).
+        _print_file_type() {
+            local path="$1"
+            local file_type
+            file_type=$(file "$path" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//')
+            if [[ -n "$file_type" ]]; then
+                echo "${STAT_INDENT}🩻 ${HC}File Type:${NC} ${GR}${file_type}${NC}"
+            else
+                echo "${STAT_INDENT}🩻 ${HC}File Type:${NC} ${GY}[Unknown]${NC}"
+            fi
+        }
+
+        # Prints indented human-readable size.
+        # Dirs and bundles use du -sk (recursive total); files use get_file_size_bytes.
+        # Skipped for broken symlinks (caller's responsibility).
+        _print_size() {
+            local path="$1"
+            local size_bytes size
+            if [[ -d "$path" ]]; then
+                size_bytes=$(du -sk "$path" 2>/dev/null | awk '{print $1 * 1024}')
+            else
+                size_bytes=$(get_file_size_bytes "$path")
+            fi
+            size=$(format_size "${size_bytes:-0}")
+            echo "${STAT_INDENT}📏 ${HC}Size:${NC} ${GR}${size}${NC}"
+        }
+
+        # Prints indented binary architecture info.
+        # Accepts any path type — resolves bundle executables internally via
+        # _resolve_bundle_executable. Non-Mach-O files print [Not a binary].
+        # Regular (non-bundle) dirs are skipped — caller's responsibility not to call.
+        # Skipped for broken symlinks (caller's responsibility).
+        # Requires in parent function scope:
+        #   local arch_cache_files=()
+        #   local arch_cache_results=()
+        #   local arm64_count=0 x86_64_count=0 universal_count=0 other_arch_count=0
+        _print_arch() {
+            local path="$1"
+            local target_path="$path"
+
+            if [[ -d "$path" ]] && is_bundle "$path"; then
+                target_path=$(_resolve_bundle_executable "$path")
+                if [[ -z "$target_path" ]]; then
+                    echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} ${GY}N/A - executable not resolved${NC}"
+                    return
+                fi
+            fi
+
+            if ! is_macho_file "$target_path"; then
+                echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} ${GY}Not a binary${NC}"
+                return
+            fi
+
+            local lipo_output
+            lipo_output=$(get_archs_cached "$target_path")
+            if [[ $? -ne 0 || -z "$lipo_output" ]]; then
+                echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} ${GY}N/A${NC}"
+                return
+            fi
+
+            local arch_array=($lipo_output)
+            local arch_count=${#arch_array[@]}
+            if [[ $arch_count -eq 1 ]]; then
+                case "${arch_array[0]}" in
+                    arm64|arm64e) (( arm64_count++      )) ;;
+                    x86_64|i386)  (( x86_64_count++     )) ;;
+                    *)             (( other_arch_count++ )) ;;
+                esac
+            else
+                (( universal_count++ ))
+            fi
+
+            local arches_display
+            arches_display=$(format_arches_display "$lipo_output")
+            echo "${STAT_INDENT}🧬 ${HC}Architecture:${NC} $arches_display"
+        }
+
+        # Prints indented signature status + detail sub-lines
+        # (Identifier, TeamIdentifier, Authority, Signature, Notarization Ticket).
+        # Detail sub-lines use double-indent (${STAT_INDENT}${STAT_INDENT}).
+        # For bundles, codesign runs on the bundle root.
+        # Skipped for broken symlinks (caller's responsibility).
+        # Requires in parent function scope:
+        #   local adhoc_signature_needed=0
+        _print_signature() {
+            local path="$1"
+
+            get_signature_status_label "$path"
+
+            echo "${STAT_INDENT}✍️  ${HC}Signature:${NC} $SIGNATURE_STATUS"
+
+            # [[ "$NEEDS_SIGNING" -eq 1 ]] && adhoc_signature_needed=1
+
+            # Detail sub-lines — always shown in Quick Stats (no scan_depth gating).
+            # Double-indented so they nest visually under the sig: label.
+            local detail_lines
+            detail_lines=$(
+                {
+                    echo "$LAST_SIG_DETAIL" | grep "^Identifier="       | grep -v "^TeamIdentifier="
+                    echo "$LAST_SIG_DETAIL" | grep "^TeamIdentifier="
+                    echo "$LAST_SIG_DETAIL" | grep "^Authority="
+                    echo "$LAST_SIG_DETAIL" | grep "^Signature="
+                    echo "$LAST_SIG_DETAIL" | grep "^Notarization Ticket="
+                } | grep -v "^$"
+            )
+            if [[ -n "$detail_lines" ]]; then
+                echo "${GY}$detail_lines${NC}" | sed "s/^/${STAT_INDENT}${STAT_INDENT}/"
+                # echo "$detail_lines" | sed 's/^/    /'
+            fi
+        }
+
+        # Resolves, hashes, and prints a bundle's main executable.
+        # Refactored to use _resolve_bundle_executable.
+        # Prints only indented result line(s) — caller prints the name line.
+        _hash_bundle() {
+            local path="$1"
+            local executable_path
+            executable_path=$(_resolve_bundle_executable "$path")
+
+            if [[ -z "$executable_path" ]]; then
+                local bundle_plist="$path/Contents/Info.plist"
+                local executable_name
+                executable_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$bundle_plist" 2>/dev/null)
+                if [[ -z "$executable_name" ]]; then
+                    echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo:${NC} ${GY}[No CFBundleExecutable found]${NC}"
+                else
+                    echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo:${NC} ${GY}[Executable not found: $executable_name]${NC}"
+                fi
+                return
+            fi
+
+            local rel_path="${executable_path#$path/}"
+            local hash_result
+            hash_result=$(shasum -a "$sha_algo" "$executable_path" 2>/dev/null | awk '{print $1}')
+            if [[ -n "$hash_result" ]]; then
+                echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo${NC} ${GY}($rel_path):${NC} ${GR}${hash_result}${NC}"
+            else
+                echo "${STAT_INDENT}🧪 ${HC}SHA-$sha_algo${NC} ${GY}($rel_path): [N/A]${NC}"
+            fi
+        }
+    fi
 
     while true; do
         if [[ "$DisablePathPickerWhenPathsAreSaved_Quick_Stats" == "true" ]] && [[ "${#saved_paths_to_process[@]}" -gt 0 ]]; then
@@ -2982,338 +3036,340 @@ function icloud_sync_refresh() {
 }
 #====5==== 💾 Disk Image Utility
 function disk_image_utility () {
-    # Helper: format size for display in headers and summaries
-    format_disk_size_display() {
-        local raw="$1"
-        # Treat bare numbers (no unit) as MB derived from source content
-        if [[ -z "$raw" ]]; then
-            echo ""
-            return
-        fi
+    if true; then    # only used to quickly collapse functions below
+        # Helper: format size for display in headers and summaries
+        format_disk_size_display() {
+            local raw="$1"
+            # Treat bare numbers (no unit) as MB derived from source content
+            if [[ -z "$raw" ]]; then
+                echo ""
+                return
+            fi
 
-        case "$raw" in
-            *[mM])
-                # e.g., "512m" -> "512 MB"
-                echo "${raw%[mM]} MB"
-                ;;
-            *[gG])
-                # e.g., "1g" -> "1 GB"
-                echo "${raw%[gG]} GB"
-                ;;
-            *[tT])
-                # e.g., "1t" -> "1 TB"
-                echo "${raw%[tT]} TB"
-                ;;
-            *)
-                # Bare number from existing items: interpret as MB and promote to GB when >= 1000MB
-                if echo "$raw" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
-                    local mb="$raw"
-                    if [ "$mb" -ge 1000 ]; then
-                        # Convert to GB with one decimal place
-                        local size_gb=$(( (mb * 10) / 1000 ))
-                        local size_display="${size_gb%?}.${size_gb: -1} GB"
-                        # Clean up trailing zero (e.g., 1.0 -> 1)
-                        size_display=$(echo "$size_display" | sed 's/\.0 GB$/ GB/')
-                        echo "$size_display"
-                    elif [ "$mb" -lt 2 ]; then
-                        echo "2 MB"                        
+            case "$raw" in
+                *[mM])
+                    # e.g., "512m" -> "512 MB"
+                    echo "${raw%[mM]} MB"
+                    ;;
+                *[gG])
+                    # e.g., "1g" -> "1 GB"
+                    echo "${raw%[gG]} GB"
+                    ;;
+                *[tT])
+                    # e.g., "1t" -> "1 TB"
+                    echo "${raw%[tT]} TB"
+                    ;;
+                *)
+                    # Bare number from existing items: interpret as MB and promote to GB when >= 1000MB
+                    if echo "$raw" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
+                        local mb="$raw"
+                        if [ "$mb" -ge 1000 ]; then
+                            # Convert to GB with one decimal place
+                            local size_gb=$(( (mb * 10) / 1000 ))
+                            local size_display="${size_gb%?}.${size_gb: -1} GB"
+                            # Clean up trailing zero (e.g., 1.0 -> 1)
+                            size_display=$(echo "$size_display" | sed 's/\.0 GB$/ GB/')
+                            echo "$size_display"
+                        elif [ "$mb" -lt 2 ]; then
+                            echo "2 MB"                        
+                        else
+                            echo "${mb} MB"
+                        fi
                     else
-                        echo "${mb} MB"
+                        # Fallback: show as-is
+                        echo "$raw"
                     fi
-                else
-                    # Fallback: show as-is
+                    ;;
+            esac
+        }
+        # Helper: normalize size value for hdiutil -size argument
+        normalize_disk_size_for_hdiutil() {
+            local raw="$1"
+            if [[ -z "$raw" ]]; then
+                echo ""
+                return
+            fi
+
+            case "$raw" in
+                *[mMgGtT])
+                    # Already has a unit suffix understood by hdiutil
                     echo "$raw"
+                    ;;
+                *)
+                    # Treat bare numbers as MB
+                    echo "${raw}m"
+                    ;;
+            esac
+        }
+        # Helper: convert disk image size string (e.g., 2m, 1g, 500, etc.) to MB
+        convert_disk_size_to_mb() {
+            local raw="$1"
+            local mb=0
+
+            if [[ -z "$raw" ]]; then
+                echo 0
+                return
+            fi
+
+            if echo "$raw" | grep -E '[mM]$' >/dev/null 2>&1; then
+                local num
+                num=$(echo "$raw" | sed 's/[mM]$//')
+                if echo "$num" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
+                    mb=$num
                 fi
-                ;;
-        esac
-    }
-    # Helper: normalize size value for hdiutil -size argument
-    normalize_disk_size_for_hdiutil() {
-        local raw="$1"
-        if [[ -z "$raw" ]]; then
-            echo ""
-            return
-        fi
-
-        case "$raw" in
-            *[mMgGtT])
-                # Already has a unit suffix understood by hdiutil
-                echo "$raw"
-                ;;
-            *)
-                # Treat bare numbers as MB
-                echo "${raw}m"
-                ;;
-        esac
-    }
-    # Helper: convert disk image size string (e.g., 2m, 1g, 500, etc.) to MB
-    convert_disk_size_to_mb() {
-        local raw="$1"
-        local mb=0
-
-        if [[ -z "$raw" ]]; then
-            echo 0
-            return
-        fi
-
-        if echo "$raw" | grep -E '[mM]$' >/dev/null 2>&1; then
-            local num
-            num=$(echo "$raw" | sed 's/[mM]$//')
-            if echo "$num" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
-                mb=$num
+            elif echo "$raw" | grep -E '[gG]$' >/dev/null 2>&1; then
+                local num
+                num=$(echo "$raw" | sed 's/[gG]$//')
+                if echo "$num" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
+                    mb=$((num * 1024))
+                fi
+            elif echo "$raw" | grep -E '[tT]$' >/dev/null 2>&1; then
+                local num
+                num=$(echo "$raw" | sed 's/[tT]$//')
+                if echo "$num" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
+                    mb=$((1024 * 1024))
+                fi
+            elif echo "$raw" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
+                mb=$raw
             fi
-        elif echo "$raw" | grep -E '[gG]$' >/dev/null 2>&1; then
-            local num
-            num=$(echo "$raw" | sed 's/[gG]$//')
-            if echo "$num" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
-                mb=$((num * 1024))
+
+            echo "$mb"
+        }
+        estimate_sparseimage_initial_mb() {
+            local capacity_mb="$1"
+
+            if [[ -z "$capacity_mb" ]] || [ "$capacity_mb" -le 0 ]; then
+                echo 0
+                return
             fi
-        elif echo "$raw" | grep -E '[tT]$' >/dev/null 2>&1; then
-            local num
-            num=$(echo "$raw" | sed 's/[tT]$//')
-            if echo "$num" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
-                mb=$((1024 * 1024))
+
+            # Lookup table based on actual measured APFS + AES-256 encrypted sparse images (du -sh on macOS)
+            # Capacity (MB) -> estimated initial file size (MB)
+            if    [ "$capacity_mb" -le 2 ];    then echo 3    # ~2.1 MB
+            elif  [ "$capacity_mb" -le 5 ];    then echo 6    # ~5.1 MB
+            elif  [ "$capacity_mb" -le 10 ];   then echo 9    # ~8.1 MB
+            elif  [ "$capacity_mb" -le 25 ];   then echo 8    # ~7.1 MB
+            elif  [ "$capacity_mb" -le 500 ];  then echo 9    # ~8.1 MB (50m-500m all identical)
+            elif  [ "$capacity_mb" -le 1024 ]; then echo 10   # ~9.1 MB
+            elif  [ "$capacity_mb" -le 2048 ]; then echo 11   # ~11 MB
+            elif  [ "$capacity_mb" -le 5120 ]; then echo 14   # ~14 MB
+            else                                    echo 16   # ~16 MB (10g+)
             fi
-        elif echo "$raw" | grep -E '^[0-9]+$' >/dev/null 2>&1; then
-            mb=$raw
-        fi
-
-        echo "$mb"
-    }
-    estimate_sparseimage_initial_mb() {
-        local capacity_mb="$1"
-
-        if [[ -z "$capacity_mb" ]] || [ "$capacity_mb" -le 0 ]; then
-            echo 0
-            return
-        fi
-
-        # Lookup table based on actual measured APFS + AES-256 encrypted sparse images (du -sh on macOS)
-        # Capacity (MB) -> estimated initial file size (MB)
-        if    [ "$capacity_mb" -le 2 ];    then echo 3    # ~2.1 MB
-        elif  [ "$capacity_mb" -le 5 ];    then echo 6    # ~5.1 MB
-        elif  [ "$capacity_mb" -le 10 ];   then echo 9    # ~8.1 MB
-        elif  [ "$capacity_mb" -le 25 ];   then echo 8    # ~7.1 MB
-        elif  [ "$capacity_mb" -le 500 ];  then echo 9    # ~8.1 MB (50m-500m all identical)
-        elif  [ "$capacity_mb" -le 1024 ]; then echo 10   # ~9.1 MB
-        elif  [ "$capacity_mb" -le 2048 ]; then echo 11   # ~11 MB
-        elif  [ "$capacity_mb" -le 5120 ]; then echo 14   # ~14 MB
-        else                                    echo 16   # ~16 MB (10g+)
-        fi
-    }
-    # Apple's Finder display - decimal (base-10) calculations 
-    get_sparse_image_file_size() {
-        local path_to_disk_img="$1"
-        local size=""
-        local bytes
-        
-        # Get actual size on disk in kilobytes, then convert to bytes
-        local kb=$(du -k "$path_to_disk_img" | cut -f1)
-        bytes=$((kb * 1024))
-        
-        # Convert to human-readable format using decimal (base-10) like Finder
-        if [ $bytes -ge 1000000000000 ]; then
-            size=$(awk "BEGIN {printf \"%.1f TBs\", $bytes/1000000000000}")
-        elif [ $bytes -ge 1000000000 ]; then
-            size=$(awk "BEGIN {printf \"%.1f GBs\", $bytes/1000000000}")
-        elif [ $bytes -ge 1000000 ]; then
-            size=$(awk "BEGIN {printf \"%.1f MBs\", $bytes/1000000}")
-        elif [ $bytes -ge 1000 ]; then
-            size=$(awk "BEGIN {printf \"%.1f KBs\", $bytes/1000}")
-        else
-            size="${bytes} bytes"
-        fi
-        echo "$size"
-    }
-    get_sparse_image_capacity() {
-        local image="$1"
-        local sectors
-        sectors=$(hdiutil resize -limits "$image" 2>/dev/null | tail -1 | awk '{print $2}')
-
-        if [ -z "$sectors" ]; then
-            echo "N/A"
-            return
-        fi
-
-        local bytes=$(( sectors * 512 ))
-
-        if [ "$bytes" -ge 1000000000000 ]; then
-            awk "BEGIN {printf \"%.1f TBs\", $bytes/1000000000000}"
-        elif [ "$bytes" -ge 1000000000 ]; then
-            awk "BEGIN {printf \"%.1f GBs\", $bytes/1000000000}"
-        elif [ "$bytes" -ge 1000000 ]; then
-            awk "BEGIN {printf \"%.1f MBs\", $bytes/1000000}"
-        elif [ "$bytes" -ge 1000 ]; then
-            awk "BEGIN {printf \"%.1f KBs\", $bytes/1000}"
-        else
-            echo "${bytes} bytes"
-        fi
-    }
-    populate_pending_disk_image_info() {
-        if [[ -z "$sparse_image_capacity_after" ]]; then
-            # Human-friendly capacity display for header
-            header_capacity="$(format_disk_size_display "$disk_img_size")"
-        else
-            header_capacity=$sparse_image_capacity_after
-        fi
-
-        if [[ -z "$sparse_image_file_size_after" ]]; then
-            # Estimate on-disk sparseimage file size:
-            # - If creating from source files, use calculated_size (MB) from their total.
-            # - Otherwise, estimate from the chosen capacity using calibration data.
-            local est_mb=""
-            if [[ "$create_from_source" == "true" && -n "$calculated_size" ]]; then
-                est_mb="$calculated_size"
+        }
+        # Apple's Finder display - decimal (base-10) calculations 
+        get_sparse_image_file_size() {
+            local path_to_disk_img="$1"
+            local size=""
+            local bytes
+            
+            # Get actual size on disk in kilobytes, then convert to bytes
+            local kb=$(du -k "$path_to_disk_img" | cut -f1)
+            bytes=$((kb * 1024))
+            
+            # Convert to human-readable format using decimal (base-10) like Finder
+            if [ $bytes -ge 1000000000000 ]; then
+                size=$(awk "BEGIN {printf \"%.1f TBs\", $bytes/1000000000000}")
+            elif [ $bytes -ge 1000000000 ]; then
+                size=$(awk "BEGIN {printf \"%.1f GBs\", $bytes/1000000000}")
+            elif [ $bytes -ge 1000000 ]; then
+                size=$(awk "BEGIN {printf \"%.1f MBs\", $bytes/1000000}")
+            elif [ $bytes -ge 1000 ]; then
+                size=$(awk "BEGIN {printf \"%.1f KBs\", $bytes/1000}")
             else
-                local capacity_mb
-                capacity_mb="$(convert_disk_size_to_mb "$disk_img_size")"
-                if [[ -n "$capacity_mb" && "$capacity_mb" -gt 0 ]]; then
-                    est_mb="$(estimate_sparseimage_initial_mb "$capacity_mb")"
+                size="${bytes} bytes"
+            fi
+            echo "$size"
+        }
+        get_sparse_image_capacity() {
+            local image="$1"
+            local sectors
+            sectors=$(hdiutil resize -limits "$image" 2>/dev/null | tail -1 | awk '{print $2}')
+
+            if [ -z "$sectors" ]; then
+                echo "N/A"
+                return
+            fi
+
+            local bytes=$(( sectors * 512 ))
+
+            if [ "$bytes" -ge 1000000000000 ]; then
+                awk "BEGIN {printf \"%.1f TBs\", $bytes/1000000000000}"
+            elif [ "$bytes" -ge 1000000000 ]; then
+                awk "BEGIN {printf \"%.1f GBs\", $bytes/1000000000}"
+            elif [ "$bytes" -ge 1000000 ]; then
+                awk "BEGIN {printf \"%.1f MBs\", $bytes/1000000}"
+            elif [ "$bytes" -ge 1000 ]; then
+                awk "BEGIN {printf \"%.1f KBs\", $bytes/1000}"
+            else
+                echo "${bytes} bytes"
+            fi
+        }
+        populate_pending_disk_image_info() {
+            if [[ -z "$sparse_image_capacity_after" ]]; then
+                # Human-friendly capacity display for header
+                header_capacity="$(format_disk_size_display "$disk_img_size")"
+            else
+                header_capacity=$sparse_image_capacity_after
+            fi
+
+            if [[ -z "$sparse_image_file_size_after" ]]; then
+                # Estimate on-disk sparseimage file size:
+                # - If creating from source files, use calculated_size (MB) from their total.
+                # - Otherwise, estimate from the chosen capacity using calibration data.
+                local est_mb=""
+                if [[ "$create_from_source" == "true" && -n "$calculated_size" ]]; then
+                    est_mb="$calculated_size"
+                else
+                    local capacity_mb
+                    capacity_mb="$(convert_disk_size_to_mb "$disk_img_size")"
+                    if [[ -n "$capacity_mb" && "$capacity_mb" -gt 0 ]]; then
+                        est_mb="$(estimate_sparseimage_initial_mb "$capacity_mb")"
+                    fi
                 fi
-            fi
 
-            local est_display="16 MB"
-            if [[ -n "$est_mb" && "$est_mb" -gt 0 ]]; then
-                est_display="$(format_disk_size_display "$est_mb")"
+                local est_display="16 MB"
+                if [[ -n "$est_mb" && "$est_mb" -gt 0 ]]; then
+                    est_display="$(format_disk_size_display "$est_mb")"
+                fi
+            else
+                est_display=$sparse_image_file_size_after
             fi
-        else
-            est_display=$sparse_image_file_size_after
-        fi
-        if [[ -z "$sparse_image_capacity_after" ]] && [[ -z "$sparse_image_file_size_after" ]]; then
-            echo_centered "${BO}Pending Disk Image Info:${NC}"
-            echo "${GR}Name:${NC} $( if [[ -n "$vol_name" ]]; then echo "$vol_name.sparseimage"; elif [[ -n "$existing_vol_name" ]]; then echo "$existing_vol_name.sparseimage"; fi )"
-            echo_centered "${GR}Est. File Size:${NC}  | ~$est_display |  ${GR}Est. Capacity:${NC}  | $( if [[ -z $header_capacity ]]; then echo "$header_capacity"; else echo "~$header_capacity"; fi ) |  ${GR}Encryption:${NC}  | $( if [[ "$use_password_active" == "true" ]]; then echo "✅"; elif [[ "$use_password_active" == "false" ]]; then echo "❌"; else echo ""; fi ) |"
+            if [[ -z "$sparse_image_capacity_after" ]] && [[ -z "$sparse_image_file_size_after" ]]; then
+                echo_centered "${BO}Pending Disk Image Info:${NC}"
+                echo "${GR}Name:${NC} $( if [[ -n "$vol_name" ]]; then echo "$vol_name.sparseimage"; elif [[ -n "$existing_vol_name" ]]; then echo "$existing_vol_name.sparseimage"; fi )"
+                echo_centered "${GR}Est. File Size:${NC}  | ~$est_display |  ${GR}Est. Capacity:${NC}  | $( if [[ -z $header_capacity ]]; then echo "$header_capacity"; else echo "~$header_capacity"; fi ) |  ${GR}Encryption:${NC}  | $( if [[ "$use_password_active" == "true" ]]; then echo "✅"; elif [[ "$use_password_active" == "false" ]]; then echo "❌"; else echo ""; fi ) |"
+                echo
+            else
+                echo_centered "${BO}Pending Disk Image Info:${NC}"
+                echo "${GR}Name:${NC} $( if [[ -n "$vol_name" ]]; then echo "$vol_name.sparseimage"; elif [[ -n "$existing_vol_name" ]]; then echo "$existing_vol_name.sparseimage"; fi )"
+                echo_centered "${GR}Est. File Size:${NC}  | $est_display |  ${GR}Est. Capacity:${NC}  | $( if [[ -z $header_capacity ]]; then echo "$header_capacity"; else echo "$header_capacity"; fi ) |  ${GR}Encryption:${NC}  | $( if [[ "$use_password_active" == "true" ]]; then echo "✅"; elif [[ "$use_password_active" == "false" ]]; then echo "❌"; else echo ""; fi ) |"
+                echo
+            fi
+        }
+        populate_managed_disk_image_info() {
+            echo_centered "${BO}Current Disk Image Info:${NC}"
             echo
-        else
-            echo_centered "${BO}Pending Disk Image Info:${NC}"
-            echo "${GR}Name:${NC} $( if [[ -n "$vol_name" ]]; then echo "$vol_name.sparseimage"; elif [[ -n "$existing_vol_name" ]]; then echo "$existing_vol_name.sparseimage"; fi )"
-            echo_centered "${GR}Est. File Size:${NC}  | $est_display |  ${GR}Est. Capacity:${NC}  | $( if [[ -z $header_capacity ]]; then echo "$header_capacity"; else echo "$header_capacity"; fi ) |  ${GR}Encryption:${NC}  | $( if [[ "$use_password_active" == "true" ]]; then echo "✅"; elif [[ "$use_password_active" == "false" ]]; then echo "❌"; else echo ""; fi ) |"
+            # echo "${GR}Name:${NC} $selected_disk_img_basename"
+            echo_centered "${GR}File Size:${NC}  | $(get_sparse_image_file_size "$selected_disk_img_for_sizing") |  ${GR}Capacity:${NC}  | $header_capacity |  ${GR}Encryption:${NC}  | $(encryption_status) |"
             echo
-        fi
-    }
-    populate_managed_disk_image_info() {
-        echo_centered "${BO}Current Disk Image Info:${NC}"
-        echo
-        # echo "${GR}Name:${NC} $selected_disk_img_basename"
-        echo_centered "${GR}File Size:${NC}  | $(get_sparse_image_file_size "$selected_disk_img_for_sizing") |  ${GR}Capacity:${NC}  | $header_capacity |  ${GR}Encryption:${NC}  | $(encryption_status) |"
-        echo
-    }
+        }
 
-    # Total number of size options
-    local total_number_of_size_options=32
+        # Total number of size options
+        local total_number_of_size_options=32
 
-    # Function to get menu item by index (simulates array access)
-    get_size_options() {
-        local index=$1
-        case $index in
-            0) echo " 1) ${GR}2 MBs${NC}" ;;
-            1) echo " 2) ${GR}5 MBs${NC}" ;;
-            2) echo " 3) ${GR}15 MBs${NC}" ;;
-            3) echo " 4) ${GR}25 MBs${NC}" ;;
-            4) echo " 5) ${GR}50 MBs${NC}" ;;
-            5) echo " 6) ${GR}100 MBs${NC}" ;;
-            6) echo " 7) ${GR}500 MBs${NC}" ;;
-            7) echo " 8) ${GR}750 MBs${NC}" ;;
-            8) echo " 9) ${GR}1 GB${NC}" ;;
-            9) echo "10) ${GR}2 GBs${NC}" ;;
-            10) echo "11) ${GR}3 GBs${NC}" ;;
-            11) echo "12) ${GR}4 GBs${NC}" ;;
-            12) echo "13) ${GR}5 GBs${NC}" ;;
-            13) echo "14) ${GR}6 GBs${NC}" ;;
-            14) echo "15) ${GR}7 GBs${NC}" ;;
-            15) echo "16) ${GR}8 GBs${NC}" ;;
-            16) echo "17) ${GR}10 GBs${NC}" ;;
-            17) echo "18) ${GR}15 GBs${NC}" ;;
-            18) echo "19) ${GR}25 GBs${NC}" ;;
-            19) echo "20) ${GR}50 GBs${NC}" ;;
-            20) echo "21) ${GR}100 GBs${NC}" ;;
-            21) echo "22) ${GR}250 GBs${NC}" ;;
-            22) echo "23) ${GR}500 GBs${NC}" ;;
-            23) echo "24) ${GR}750 GBs${NC}" ;;
-            24) echo "25) ${GR}1 TB${NC}" ;;
-            25) echo "26) ${GR}2 TBs${NC}" ;;
-            26) echo "27) ${GR}3 TBs${NC}" ;;
-            27) echo "28) ${GR}4 TBs${NC}" ;;
-            28) echo "29) ${GR}5 TBs${NC}" ;;
-            29) echo "30) ${GR}6 TBs${NC}" ;;
-            30) echo "31) ${GR}7 TBs${NC}" ;;
-            31) echo "32) ${GR}Custom${NC}" ;;
-            *) echo "" ;;
-        esac
-    }
-    # Simple four-column layout (bash 3.2 compatible)
-    # update num_items as needed
-    display_four_column_size_options() {
-        local num_items=$total_number_of_size_options
-        local items_per_col=$(( (num_items + 3) / 4 ))
-        # change width between columns here
-        local col2_start=25
-        local col3_start=50
-        local col4_start=75
+        # Function to get menu item by index (simulates array access)
+        get_size_options() {
+            local index=$1
+            case $index in
+                0) echo " 1) ${GR}2 MBs${NC}" ;;
+                1) echo " 2) ${GR}5 MBs${NC}" ;;
+                2) echo " 3) ${GR}15 MBs${NC}" ;;
+                3) echo " 4) ${GR}25 MBs${NC}" ;;
+                4) echo " 5) ${GR}50 MBs${NC}" ;;
+                5) echo " 6) ${GR}100 MBs${NC}" ;;
+                6) echo " 7) ${GR}500 MBs${NC}" ;;
+                7) echo " 8) ${GR}750 MBs${NC}" ;;
+                8) echo " 9) ${GR}1 GB${NC}" ;;
+                9) echo "10) ${GR}2 GBs${NC}" ;;
+                10) echo "11) ${GR}3 GBs${NC}" ;;
+                11) echo "12) ${GR}4 GBs${NC}" ;;
+                12) echo "13) ${GR}5 GBs${NC}" ;;
+                13) echo "14) ${GR}6 GBs${NC}" ;;
+                14) echo "15) ${GR}7 GBs${NC}" ;;
+                15) echo "16) ${GR}8 GBs${NC}" ;;
+                16) echo "17) ${GR}10 GBs${NC}" ;;
+                17) echo "18) ${GR}15 GBs${NC}" ;;
+                18) echo "19) ${GR}25 GBs${NC}" ;;
+                19) echo "20) ${GR}50 GBs${NC}" ;;
+                20) echo "21) ${GR}100 GBs${NC}" ;;
+                21) echo "22) ${GR}250 GBs${NC}" ;;
+                22) echo "23) ${GR}500 GBs${NC}" ;;
+                23) echo "24) ${GR}750 GBs${NC}" ;;
+                24) echo "25) ${GR}1 TB${NC}" ;;
+                25) echo "26) ${GR}2 TBs${NC}" ;;
+                26) echo "27) ${GR}3 TBs${NC}" ;;
+                27) echo "28) ${GR}4 TBs${NC}" ;;
+                28) echo "29) ${GR}5 TBs${NC}" ;;
+                29) echo "30) ${GR}6 TBs${NC}" ;;
+                30) echo "31) ${GR}7 TBs${NC}" ;;
+                31) echo "32) ${GR}Custom${NC}" ;;
+                *) echo "" ;;
+            esac
+        }
+        # Simple four-column layout (bash 3.2 compatible)
+        # update num_items as needed
+        display_four_column_size_options() {
+            local num_items=$total_number_of_size_options
+            local items_per_col=$(( (num_items + 3) / 4 ))
+            # change width between columns here
+            local col2_start=25
+            local col3_start=50
+            local col4_start=75
 
-        
-        for ((i=0; i<items_per_col; i++)); do
-            local col1_index=$i
-            local col2_index=$((i + items_per_col))
-            local col3_index=$((i + items_per_col * 2))
-            local col4_index=$((i + items_per_col * 3))
             
-            local col1_item=""
-            local col2_item=""
-            local col3_item=""
-            local col4_item=""
-            
-            # Get column 1 item
-            if [[ $col1_index -lt $num_items ]]; then
-                col1_item=$(get_size_options $col1_index)
-            fi
-            
-            # Get column 2 item
-            if [[ $col2_index -lt $num_items ]]; then
-                col2_item=$(get_size_options $col2_index)
-            fi
-            
-            # Get column 3 item
-            if [[ $col3_index -lt $num_items ]]; then
-                col3_item=$(get_size_options $col3_index)
-            fi
+            for ((i=0; i<items_per_col; i++)); do
+                local col1_index=$i
+                local col2_index=$((i + items_per_col))
+                local col3_index=$((i + items_per_col * 2))
+                local col4_index=$((i + items_per_col * 3))
+                
+                local col1_item=""
+                local col2_item=""
+                local col3_item=""
+                local col4_item=""
+                
+                # Get column 1 item
+                if [[ $col1_index -lt $num_items ]]; then
+                    col1_item=$(get_size_options $col1_index)
+                fi
+                
+                # Get column 2 item
+                if [[ $col2_index -lt $num_items ]]; then
+                    col2_item=$(get_size_options $col2_index)
+                fi
+                
+                # Get column 3 item
+                if [[ $col3_index -lt $num_items ]]; then
+                    col3_item=$(get_size_options $col3_index)
+                fi
 
-            # Get column 4 item
-            if [[ $col4_index -lt $num_items ]]; then
-                col4_item=$(get_size_options $col4_index)
-            fi
-            
-            # Print column 1
-            printf "%s" " $col1_item"
-            
-            # Move to column 2 and print
-            if [[ -n "$col2_item" ]]; then
-                printf '\033[%dG' $col2_start
-                printf "%s" "   $col2_item"
-            fi
-            
-            # Move to column 3 and print
-            if [[ -n "$col3_item" ]]; then
-                printf '\033[%dG' $col3_start
-                printf "%s" "   $col3_item"
-            fi        
+                # Get column 4 item
+                if [[ $col4_index -lt $num_items ]]; then
+                    col4_item=$(get_size_options $col4_index)
+                fi
+                
+                # Print column 1
+                printf "%s" " $col1_item"
+                
+                # Move to column 2 and print
+                if [[ -n "$col2_item" ]]; then
+                    printf '\033[%dG' $col2_start
+                    printf "%s" "   $col2_item"
+                fi
+                
+                # Move to column 3 and print
+                if [[ -n "$col3_item" ]]; then
+                    printf '\033[%dG' $col3_start
+                    printf "%s" "   $col3_item"
+                fi        
 
-            # Move to column 4 and print
-            if [[ -n "$col4_item" ]]; then
-                printf '\033[%dG' $col4_start
-                printf "%s" "   $col4_item"
-            fi
-            
-            printf "\n"
-        done
-    }
-
+                # Move to column 4 and print
+                if [[ -n "$col4_item" ]]; then
+                    printf '\033[%dG' $col4_start
+                    printf "%s" "   $col4_item"
+                fi
+                
+                printf "\n"
+            done
+        }
+    fi
     # Loop 1: Create or Manage a disk image
     while true; do
         trap 'return' SIGINT
+        local disk_util_path=""
         resize_terminal 95 24
         clear
-        display_Disk_Image_Utility_header_for_80px
+        display_Disk_Image_Utility_header_for_95px
         echo_centered "${BO}Fast creation & management of sparse image files on macOS${NC}"
         echo
         echo "${GR}What is a .sparseimage file?${NC}"
@@ -5869,7 +5925,7 @@ function disk_image_utility () {
                 done
             done
         else
-            echo -n "❌ ${RE}Invalid choice.${NC} "
+            echo "❌ ${RE}Invalid choice.${NC} "
             read -r -t 1 -n 1
             continue
         fi
@@ -6403,534 +6459,1163 @@ function create_symlink() {
 #====7==== ⚙️ macOS Preferences
 function macos_preferences() {
     # Define preference commands with their active/inactive/reset actions
-    declare -a preference_commands=(
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🆕 [NEW for ${BL}macOS Tahoe 26]${NC}|"
-        "🌑 Appearance: Enable dark mode on icons ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleIconAppearanceTheme|RegularDark|||darkmode|"
-        "🪟 Appearance: Enable tinted Liquid Glass ${BL}(Tahoe 26.1+)${NC}|NSGlobalDomain|NSGlassDiffusionSetting|true|false|false|writeResetValue|"
-        "📁 Appearance: Disable 'Tint Folders Based On Tags' ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleDisableTagBasedIconTinting|true|||delete|"
-        "📁 Finder: Shrink sidebar width to the minimum ${BL}(Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
-        # "📏 Shrink sidebar width to the minimum (2 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
-        "💬 Messages: Screen Unknown Senders ${BL}(Tahoe 26+)${NC}|com.apple.MobileSMS|FilterMessageRequests|true|false|false|writeResetValue|"
-        "📋 Menu Bar: Never Hide Menu Bar In Fullscreen ${BL}(Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
-        "📋 Menu Bar: Show Menu Bar Background ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
-        "📋 Menu Bar: Show Timer in Menu Bar ${BL}(Tahoe 26.2+)${NC}|com.apple.controlcenter|Timer|16|0|0|-currentHost|"
-        "🔑 Passwords: Disallow Contacting Websites ${BL}(Tahoe 26+)${NC}|com.apple.Passwords|WBSPasswordsAppBackgroundNetworkingEnabled|false|true|true|writeResetValue|${GY}Prevents network telemetry with websites from saved passwords. (This is how icons and names get shown)${NC}"
-        "📞 Phone: Filter Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|filterUnknownCallersAsNewCallers|true|false|true|writeResetValue|"
-        "📞 Phone: Screen Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|ReceptionistDisabled|false|true|false|writeResetValue|${GY}Toggles on 'Ask Reason for Calling'${NC}"
-        "📞 Phone: Enable Hold Assist ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|HoldAssistDetectionEnabled|true|false|true|writeResetValue|"
-        "📞 Phone: Enable Live Voicemail ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|CallScreeningDisabled|false|true|false|writeResetValue|"
-        "✏️  Preview: Show Markup toolbar for images by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|writeResetValue|"
-        "✏️  Preview: Show Markup toolbar for PDFs by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|writeResetValue|"
-        "🗂️  Safari: Disable compact tab layout ${BL}(Tahoe 26.4+)${NC}|com.apple.Safari|ShowStandaloneTabBar|true|false|true|writeResetValue|"
-        "🗂️  Safari: Show Color in Tab Bar ${BL}(Tahoe 26+)${NC}|com.apple.Safari|NeverUseBackgroundColorInToolbar|false|true|false|writeResetValue|${GY}(On by default)${NC}"
-        "🔍 Spotlight: Disable all default results (except System Settings & Apps) ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Remove various apps/items|||ReduceSpotlightResultsInTahoe|${GY}Note that more apps may show up here later on once using them. In that case, this preference may inadvertently affect new apps that show up here. (Intended for fresh installs)${NC}"
-        "🔍 Spotlight: Disable 'Show Related Content' ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Custom.relatedContents|||DisableSpotlightRelatedContent|"
-        "🔍 Spotlight: Enable Clipboard Manager ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryEnabled|true|false|false|writeResetValue|"
-        "🔍 Spotlight: Increase Clipboard history from 8hrs to 7 days ${BL}(Tahoe 26.1+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|604800|28800|28800|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🖱️  [Mouse]|"
-        "🚫 Disable Natural Scrolling ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|com.apple.swipescrolldirection|false|true|true|writeResetValue|"
-        "🚀 Increase Tracking Speed beyond default ${BO}(Requires Restart)${NC}|NSGlobalDomain|com.apple.mouse.scaling|5|3.0|3.0|writeResetValue|"
-        "🖱️  Enable secondary button (on bluetooth multi-touch mice)|com.apple.driver.AppleBluetoothMultitouch.mouse|MouseButtonMode|TwoButton|OneButton|OneButton|writeResetValue|"
-        "🚫 Disable 'Shake mouse pointer to locate' ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|CGDisableCursorLocationMagnification|true|false|true|writeResetValue|"
-        "🚫 Disable the 'Mouse Keys' keyboard shortcut|com.apple.universalaccess|useMouseKeysShortcutKeys|true|false|true|DisableMouseKeys|${GY}Prevents 'Mouse Keys' from getting triggered when pressing the option key 5 times in a row.${NC}"
-        # "🚫 Disable 'Mouse Keys'|com.apple.universalaccess|mouseDriver|true|false|true|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        # "GROUP|💻 [TrackPad - Built-In]|"
-        "GROUP|💻 [TrackPad]|"
-        "💨 Increase Tracking Speed|NSGlobalDomain|com.apple.trackpad.scaling|3|0.5|0.5|writeResetValue|${GY}Increases to fastest default setting${NC}"
-        # "⚙️  Enable Tap to click|com.apple.AppleMultitouchTrackpad|Clicking|1|0||delete|Enables 'Tap to click' on built-in Trackpads"
-        # "⚙️  Enable Tap to click (in login screen)|NSGlobalDomain|com.apple.mouse.tapBehavior|1|0||-currentHost|Enables 'Tap to click' on built-in Trackpads (in login screen)."
-        "⚙️  Enable Tap To Click|NSGlobalDomain|com.apple.mouse.tapBehavior|1|0|0|-currentHost|"
-        "⚙️  Enable Two-Finger Tap To Right Click AND Bottom Right Click ${BO}(Requires Logging Out)${NC}|Various|Various|true|false|false|Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click|${GY}Enables both of these settings. (Note that System Settings will show only 'Click in Bottom Right Corner' selected, but 'Click or Tap with Two Fingers' is also applied!)${NC}"
-        # "⚙️  Enable secondary click|NSGlobalDomain|com.apple.trackpad.enableSecondaryClick|true|false||-currentHost|Enables bottom-right right-click on built-in Trackpads (in login screen)."
-        # "⚙️  Enable two-finger tap to right-click|com.apple.AppleMultitouchTrackpad|TrackpadRightClick|true|false|||Enable two-finger right-click on built-in Trackpads"
-        # "⚙️  Enable corner right-click (disables 'tap to right-click')|NSGlobalDomain|com.apple.trackpad.trackpadCornerClickBehavior|1|0||-currentHost|Enables corner right-click on built-in Trackpads (in login screen)."
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        # "GROUP|💻 [TrackPad - External/Bluetooth|"
-        # "⚙️  Enable Tap to click|com.apple.driver.AppleBluetoothMultitouch.trackpad|Clicking|1|0|||Enables 'Tap to click' on bluetooth Trackpads"
-        # "⚙️  Enable two-finger tap to right-click|com.apple.driver.AppleBluetoothMultitouch.trackpad|TrackpadRightClick|1|0|||Enable two-finger right-click on bluetooth Trackpads"
-        # "⚙️  Enable pinch-to-zoom|com.apple.driver.AppleBluetoothMultitouch.trackpad|TrackpadPinch|1|0|||Enables pinch-to-zoom on bluetooth Trackpads"
-        # "⚙️  Enable corner right-click (disables 'tap to right-click')|com.apple.driver.AppleBluetoothMultitouch.trackpad|TrackpadCornerSecondaryClick|0|1|||Enables corner right-click on bluetooth Trackpads (disables tap to right click)"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|⌨️  [Keyboard]|"
-        "💨 Speed Up Initial Key Repeat Rate ${BO}(Requires logging out)${NC}|NSGlobalDomain|KeyRepeat|2|6|6|writeResetValue|${GY}Speeds up the repeat of pressed keys.${NC}"
-        "💨 Speed Up Delay Until Key Repeat ${BO}(Requires logging out)${NC}|NSGlobalDomain|InitialKeyRepeat|15|25|25|writeResetValue|${GY}Speeds up the delay until pressed keys are repeated.${NC}"
-        "↔️  Allow tab navigation across UI|NSGlobalDomain|AppleKeyboardUIMode|2|0|2|writeResetValue|${GY}Enables full keyboard access for all UI controls${NC}"
-        "🚫 Disable auto-capitalization|NSGlobalDomain|NSAutomaticCapitalizationEnabled|false|true|true|writeResetValue|"
-        "🚫 Disable auto-correct|NSGlobalDomain|NSAutomaticSpellingCorrectionEnabled|false|true|true|writeResetValue|"
-        "🚫 Disable auto-period substitution|NSGlobalDomain|NSAutomaticPeriodSubstitutionEnabled|false|true|true|writeResetValue|"
-        "😌 Fn/🌐 key Shows Emoji & Symbols ${BO}(Requires logging out)${NC}|com.apple.HIToolbox|AppleFnUsageType|2|3|2|writeResetValue|${GY}(On by default now in recent macOS versions)${NC}"
-        "🚫 Disable accent options when a key is held down ${BO}(Requires logging out)${NC}|NSGlobalDomain|ApplePressAndHoldEnabled|false|true|true|writeResetValue|"
-        "🌐 Use F1, F2, etc. keys as standard function keys ${BO}(Requires logging out)${NC}|NSGlobalDomain|com.apple.keyboard.fnState|true|false|false|writeResetValue|${GY}When this option is selected, press the fn key to use the special features printed on each key.${NC}"
-
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|⌨️  [Keyboard Shortcuts]|"
-        "🌎 Global: Sets ⌥⌘ +L/R arrows to Show Previous/Next Tab|NSGlobalDomain|NSUserKeyEquivalents|'{\"Show Previous Tab\" = \"@~\\U2190\"; \"Show Next Tab\" = \"@~\\U2192\"}'|delete \"Show Next Tab\"; \"Show Previous Tab\"|delete \"Show Next Tab\"; \"Show Previous Tab\"|KeyboardShortcuts|${GY}Sets ⌥⌘ + left/right arrow keys to show next/previous tabs (supported in most apps).${NC} ${BO}This requires logging out to take effect${NC}"        
-        "📁 Finder: Swaps the default shortcuts for Get Info and Show/Hide Inspector|com.apple.finder|NSUserKeyEquivalents|'{\"Get Info\" = \"@~i\"; \"Show Inspector\" = \"@i\"; \"Hide Inspector\" = \"@i\"}'|delete \"Get Info\"; \"Show Inspector\"; \"Hide Inspector\"|delete \"Get Info\"; \"Show Inspector\"; \"Hide Inspector\"|KeyboardShortcuts|${GY}Swaps default Get Info shortcut (⌘I) with Show/Hide Inspector shortcut (⌘⌥I). (Show Inspector refreshes the info panel once another file is selected, unlike Get Info)${NC}"
-        "🔎 Preview: Sets ⌥⌘M to toggle the Markup Toolbar|com.apple.Preview|NSUserKeyEquivalents|'{\"Hide Markup Toolbar\" = \"@~m\"; \"Show Markup Toolbar\" = \"@~m\"}'|delete \"Hide Markup Toolbar\"; \"Show Markup Toolbar\"|delete \"Hide Markup Toolbar\"; \"Show Markup Toolbar\"|KeyboardShortcuts|"
-        "📝 TextEdit: Swaps the default shortcuts for New and Show Fonts|com.apple.TextEdit|NSUserKeyEquivalents|'{\"New\" = \"@t\"; \"Show Fonts\" = \"@n\"}'|delete \"New\"; \"Show Fonts\"|delete \"New\"; \"Show Fonts\"|KeyboardShortcuts|${GY}For new documents and tabs, this will use ⌘T (like most apps) instead of ⌘N${NC}"
-        "🔎 Find Any File: Swaps the default shortcuts for Rename and Reveal In Finder|org.tempel.findanyfile|NSUserKeyEquivalents|'{\"Rename\" = \"@r\"; \"Reveal in Finder\" = \"@e\"}'|delete \"Rename\"; \"Reveal in Finder\"|delete \"Rename\"; \"Reveal in Finder\"|KeyboardShortcuts|"
-        "📦 Suspicious Package: Sets ⌥⌘ + L/R arrows for Show Previous/Next Tab|com.mothersruin.SuspiciousPackageApp|NSUserKeyEquivalents|'{\"Show Previous Tab\" = \"@~\\U2190\"; \"Show Next Tab\" = \"@~\\U2192\"}'|delete \"Show Next Tab\"; \"Show Previous Tab\"|delete \"Show Next Tab\"; \"Show Previous Tab\"|KeyboardShortcuts|"
-        "📦 Suspicious Package: Sets ⌥⌘ + '[' or ']' for Previous/Next Tab in Package|com.mothersruin.SuspiciousPackageApp|NSUserKeyEquivalents|'{\"Next Tab in Package\" = \"@~\U005D\"; \"Previous Tab in Package\" = \"@~\U005B\"}'|delete \"Next Tab in Package\"; \"Previous Tab in Package\"|delete \"Next Tab in Package\"; \"Previous Tab in Package\"|KeyboardShortcuts|"
-        "📦 Apparency: Sets ⌥⌘ + L/R arrows for Show Previous/Next Tab|com.mothersruin.Apparency|NSUserKeyEquivalents|'{\"Show Previous Tab\" = \"@~\\U2190\"; \"Show Next Tab\" = \"@~\\U2192\"}'|delete \"Show Next Tab\"; \"Show Previous Tab\"|delete \"Show Next Tab\"; \"Show Previous Tab\"|KeyboardShortcuts|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|💾 [Disks]|"
-        "💾 Show internal hard disks on desktop|com.apple.finder|ShowHardDrivesOnDesktop|true|false|false|writeResetValue|"
-        "💾 Show external hard disks on desktop|com.apple.finder|ShowExternalHardDrivesOnDesktop|true|false|false|writeResetValue|"
-        "💾 Show removable media on desktop|com.apple.finder|ShowRemovableMediaOnDesktop|true|false|false|writeResetValue|${GY}(for legacy CDs, DVDs and iPods)${NC}"
-        "💾 Show mounted servers on desktop|com.apple.finder|ShowMountedServersOnDesktop|true|false|false|writeResetValue|"
-        "💾 Show all devices in Disk Utility|com.apple.DiskUtility|SidebarShowAllDevices|true|false|false|writeResetValue|${GY}Shows all devices instead of only volumes${NC}"
-        "💾 Show APFS Snapshots in Disk Utility|com.apple.DiskUtility|WorkspaceShowAPFSSnapshots|true|false|false|writeResetValue|"
-        "🚫 Disable new disk requests for Time Machine|com.apple.TimeMachine|DoNotOfferNewDisksForBackup|true|false|false|writeResetValue|"
-        "🔄 Set Time Machine backup frequency to 'Manually'|/Library/Preferences/com.apple.TimeMachine|AutoBackup|false|true|true|writeResetValue|${GY}Setting this to 'manually' prevents Time Machine snapshots from taking up disk space${NC}"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|⚓️ [Dock]|"
-        "🗑️  Wipe all app icons from Dock ${BO}(for fresh installs)${NC}|com.apple.dock|persistent-apps|-array|||delete|${GY}This will wipe ALL dock icons.${NC}"
-        "📏 Set Dock size to 38|com.apple.dock|tilesize|38|48|48|writeResetValue|"
-        "⬅️  Position dock on left of screen (or bottom/right)|com.apple.dock|orientation|left|right|bottom|writeResetValue|${GY}Choosing Deactivate here will show the dock on the right${NC}"
-        "⚡ Minimize windows using Scale effect instead of Genie|com.apple.dock|mineffect|scale|genie|genie|writeResetValue|"
-        "📥 Minimize windows into their application icon|com.apple.dock|minimize-to-application|true|false|false|writeResetValue|"
-        "🫥 Automatically hide and show the dock|com.apple.dock|autohide|true|false|false|writeResetValue|"
-        "⚡ Make the dock appear faster|com.apple.dock|autohide-time-modifier|0.0|0.5|0.5|writeResetValue|${GY}Initial Auto-hide must be enabled${NC}"
-        "⚡ Make the dock disappear faster|com.apple.dock|autohide-delay|0|0.2|0.2|writeResetValue|${GY}Initial Auto-hide must be enabled${NC}"
-        "🏀 Animate opening applications|com.apple.dock|launchanim|true|false|true|writeResetValue|${GY}(On by default). Disabling this removes the bouncing icon indicator upon launch${NC}"
-        "⚪️ Show indicator lights for open apps|com.apple.dock|show-process-indicators|true|false|true|writeResetValue|${GY}(On by default now in recent macOS versions)${NC}"
-        "👻 Dim Dock Icons of Hidden Apps|com.apple.dock|showhidden|true|false|false|writeResetValue|${GY}Helps differentiate between apps that are hidden vs shown${NC}"
-        "🚫 Disable Recent Items in Dock|com.apple.dock|show-recents|false|true|false|writeResetValue|"
-        "💨 Speed Up Drag and Drop Spring Delay on Dock items|com.apple.dock|enable-spring-load-actions-on-all-items|false|true|true|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|⛶  [Hot Corners]|"
-        "🚫 Disable the default bottom right 'Quick Note' Hot Corner|com.apple.dock|wvous-br-corner|1|14|14|writeResetValue|"
-        "⏾  Enable the bottom right 'Put Display to Sleep' Hot Corner|com.apple.dock|wvous-br-corner|10|1|14|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🖥️  [Desktop, Widgets & Views]|"
-        "🚫 Disable 'click wallpaper to show Desktop' ${GY}${GR}(Sonoma 14+)${NC}|com.apple.WindowManager|EnableStandardClickToShowDesktop|false|true|true|writeResetValue|"
-        # "🗑️  Wipe all widgets from Desktop ${GY}${GR}(Sonoma 14+)${NC} ${BO}(for fresh installs)${NC}|com.apple.notificationcenterui|widgets|-array|||WipeAllDesktopWidgets|"
-        "🖥️  Show widgets on Desktop ${GY}${GR}(Sonoma 14+)${NC}|com.apple.WindowManager|StandardHideWidgets|false|true|true|writeResetValue|"
-        "ℹ️  Show item info for icons|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:showItemInfo|true|false|false|Desktop_IconView_showItemInfo|"
-        "ℹ️  Show item info below icons|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:labelOnBottom|true|false|false|Desktop_IconView_labelOnBottom|${GY}(choosing Deactivate will show item info on the right, shifting icons to the left)${NC}"
-        "🔤 Sort and arrange icons by name|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:arrangeBy|name|none|none|Desktop_IconView_arrangeBy|${GY}If currently set to 'none', your arrangement will remain intact when choosing 'name', in case you wish to revert back. (Only removing .DS_Store files will forget your current arrangement)${NC}"
-        "📏 Set icon text size to 14|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:textSize|14.000000|16.000000|12.000000|Desktop_IconView_textSize|${GY}(choosing Deactivate will set the text size to 16)${NC}"
-        "📏 Set icon size to 72|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:iconSize|72.000000|84.000000|64.000000|Desktop_IconView_iconSize|${GY}(choosing Deactivate will set grid size to 84x84)${NC}"
-        "📐 Set icon grid spacing to 100|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:gridSpacing|100.000000|85.000000|54.000000|Desktop_IconView_gridSpacing|${GY}(choosing Deactivate will set grid spacing to 85)${NC}"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|⚙️  [System & UI]|"
-        "📜 Always show scroll bars|NSGlobalDomain|AppleShowScrollBars|Always|Automatic|Automatic|writeResetValue|${GY}(instead of auto-hiding)${NC}"
-        "📜 Click in the scroll bar to 'jump to the spot that's clicked'|NSGlobalDomain|AppleScrollerPagingBehavior|true|false|false|writeResetValue|${GY}Makes scrollbars jump to clicked position${NC}"
-        "🗂️  Always prefer tabs when opening documents|NSGlobalDomain|AppleWindowTabbingMode|always|manual|manual|writeResetValue|"
-        "⚠️  Always ask to keep changes when closing documents|NSGlobalDomain|NSCloseAlwaysConfirmsChanges|true|false|false|writeResetValue|"
-        "🪟 Close windows when quitting an app|NSGlobalDomain|NSQuitAlwaysKeepsWindows|false|true|false|writeResetValue|${GY}When enabled, open documents and windows will be not restored when you re-open an application.${NC}"
-        "🖱️  Double-clicking title bar zooms window|NSGlobalDomain|AppleActionOnDoubleClick|Maximize|Fill|Fill|writeResetValue|${GY}Sets 'window title bar double-clicking action' to Zoom instead of Fill${NC}"
-        "🧹 Clean Up Share Menu Extensions|com.apple.Sharing|SharingPeopleSuggestionsDisabled|true|false|false|DisableCertainShareExtensions|${GY}Activating this will disable the following items from the 'Share...' context menu:${NC} ${YE}Add to Reading List, Notes, Add to Photos, Reminders, Save to Books, Shortcuts, Contact Suggestions & Freeform.${NC} ${GY}Note: 'Open in News' and 'Journal' would need to be toggled on/off manually currently.${NC}"
-        "📂 Expand Save Panels by default (1 of 2)|NSGlobalDomain|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
-        "📂 Expand Save Panels by default (2 of 2)|NSGlobalDomain|NSNavPanelExpandedStateForSaveMode2|true|false|false|writeResetValue|"
-        "📂 Set List View for Open Panels by default (1 of 3)|NSGlobalDomain|NSNavPanelFileLastListModeForOpenModeKey|2|1|1|writeResetValue|"
-        "📂 Set List View for Open Panels by default (2 of 3)|NSGlobalDomain|NSNavPanelFileListModeForOpenMode2|2|1|1|writeResetValue|"
-        "📂 Set List View for Open Panels by default (3 of 3)|NSGlobalDomain|NavPanelFileListModeForOpenMode|2|1|1|writeResetValue|"
-        "📂 Set List View for Save Panels by default (1 of 3)|NSGlobalDomain|NSNavPanelFileLastListModeForSaveModeKey|2|3|3|writeResetValue|"
-        "📂 Set List View for Save Panels by default (2 of 3)|NSGlobalDomain|NSNavPanelFileListModeForSaveMode2|2|3|3|writeResetValue|"
-        "📂 Set List View for Save Panels by default (3 of 3)|NSGlobalDomain|NavPanelFileListModeForSaveMode|2|3|3|writeResetValue|"
-        "🚫 ${GY}Disable Dashboard${NC} ${GY}${RE}(depreciated)${NC}|com.apple.dashboard|mcx-disabled|true|false|false|writeResetValue|${GY}Disables Dashboard and widgets on older macOS's${NC}"
-        "🚫 ${GY}Disable Notification Center${NC} ${GY}${RE}(depreciated)${NC}|launchctl|/System/Library/LaunchAgents/com.apple.notificationcenterui|unload|load||launchctl|${GY}Disables Notification Center on older macOS's${NC}"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🪟 [Window Tiling]|"
-        "🚫 Disable 'Drag windows to screen edges to tile' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTilingByEdgeDrag|false|true|true|writeResetValue|"
-        "🚫 Disable 'Drag windows to menu bar to fill screen' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTopTilingByEdgeDrag|false|true|true|writeResetValue|"
-        "🪟 Enable 'Hold ⌥ key while dragging windows to tile' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTilingOptionAccelerator|true|false|true|writeResetValue|"
-        "🚫 Disable 'Tiled windows have margins' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTiledWindowMargins|false|true|true|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🕹️  [Mission Control & Spaces]|"
-        "🪟 Automatically rearrange Spaces based on most recent use|com.apple.dock|mru-spaces|true|false|true|writeResetValue|"
-        "🪟 When switching to an app, switch to a Space with open windows for the app|NSGlobalDomain|AppleSpacesSwitchOnActivate|true|false|true|writeResetValue|"
-        "🪟 Group windows by application|com.apple.dock|expose-group-apps|true|false|false|writeResetValue|"
-        "🪟 Displays have separate Spaces ${BO}(Requires logging out)${BO}|com.apple.spaces|spans-displays|false|true|false|writeResetValue|"
-        "🪟 Drag windows to top of screen to enter Mission Control ${MA}(Sequoia 15.1+)${NC}|com.apple.dock|enterMissionControlByTopWindowDrag|true|false|true|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|✨ [Appearance]|"
-        "🌑 Enable dark mode on icons ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleIconAppearanceTheme|RegularDark|||darkmode|"
-        "🪟 Enable tinted Liquid Glass ${BL}(Tahoe 26.1+)${NC}|NSGlobalDomain|NSGlassDiffusionSetting|true|false|false|writeResetValue|"
-        "📏 Set sidebar icon size to small (in Finder/Settings)|NSGlobalDomain|NSTableViewDefaultSizeMode|1|2|2|writeResetValue|${GY}Sets sidebar icon size to small instead of medium in Finder/Settings${NC}"
-        "🪟 Enable 'Reduce Transparency'|com.apple.universalaccess|reduceTransparency|true|false|false|ReduceTransparency|${GY}Reduces transparency on macoOS UI items${NC}"
-        "🚫 Disable 'Tint Folders Based On Tags' ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleDisableTagBasedIconTinting|true|||delete|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🪄 [Animations]|"
-        "🚫 Disable Automatic Window Animations|NSGlobalDomain|NSAutomaticWindowAnimationsEnabled|false|true|||${GY}Disables automatic window animations system-wide${NC}"
-        "🚫 Disable Finder Info Window Animations|com.apple.finder|DisableAllAnimations|true|false|||${GY}Disables all Finder info window animations${NC}"
-        "🚫 Disable QuickLook Animations|NSGlobalDomain|QLPanelAnimationDuration|0.0|0.25|||${GY}Disables QuickLook panel animations${NC}"
-        "🚀 Speed Up Mission Control Animations|com.apple.dock|expose-animation-duration|0.1|0.5|||"
-        "🚀 Speed Up Finder's Drag and Drop Spring Delay|NSGlobalDomain|com.apple.springing.delay|0.2|0.5|||${GY}Reduces spring delay for Finder drag and drop${NC}"
-        "🚫 Reduce Motion ${GY}${GR}(Sonoma 14+)${NC}|com.apple.Accessibility|ReduceMotionEnabled|true|false|false|ReduceMotion|${GY}Reduces certain animations (i.e. the 'bubbly' spotlight search in Tahoe - but also affects mission control)${NC}"
-        "🚫 Disable 'Auto-play animated images/GIFs' ${GY}${GR}(Sonoma 14+)${NC}|com.apple.Accessibility|ReduceMotionAutoplayAnimatedImagesEnabled|true|false|false|writeResetValue|"
-        "🚫 Disable Launchpad animation when opening/showing ${MA}(Sequoia 15 and below)${NC}|com.apple.dock|springboard-show-duration|0|0.4|0.4|writeResetValue|"
-        "🚫 Disable Launchpad animation when closing/hiding ${MA}(Sequoia 15 and below)${NC}|com.apple.dock|springboard-hide-duration|0|0.4|0.4|writeResetValue|"
-        "🚫 Disable Launchpad animation when swiping between pages ${MA}(Sequoia 15 and below)${NC}|com.apple.dock|springboard-page-duration|0|0.4|0.4|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📋 [Finder List View Options]|${GY}(Applies to all Finder, iCloud, and Trash list views)${NC}"
-        "🗑️  Remove all .DS_Store files ${BO}(Resets all Finder views)${NC}||'find <directory> -name ".DS_Store" -type f -delete'|home folder|documents folder|root folder|Remove_All_DS_Store_Files|${GY}This may be necessary if Finder views do not change after setting some preferences. '.DS_Store' files take precedence over global .plists, so deleting them will ensure new global preferences are used. .DS_Store files will regenerate upon opening a Finder window, so ensure that all Finder windows are closed before removing .DS_Store files, as well as setting new preferences. (Try choosing Deactivate to test this for the Documents folder only)${NC}"
-        "📋 Use List View by default|com.apple.finder|FXPreferredViewStyle|Nlsv|clmv|incv|writeResetValue|${GY}Sets Finder's default view to List View instead of Icon View. (choosing Deactivate will set this to column view)${NC}"
-        "🧮 Enable Calculate All Sizes|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:ListViewSettings:calculateAllSizes|true|false|false|ListView_calculateAllSizes|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        # "GROUP|📋 [Finder List View Options]|"
-        # "Set Custom List View Columns (All Finder Views)|$HOME/Library/Preferences/com.apple.finder.plist|:ListViewColumns|active|inactive|delete|ListViewColumns|Sets custom column configuration for all Finder list views (iCloud, Standard, Save Panels)"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📁 [Finder Icon View Options]|${GY}(Applies to all Finder, Save Dialogs, and iCloud icon views)${NC}"
-        "🗑️  Remove all .DS_Store files ${BO}(Resets all Finder views)${NC}||'find <directory> -name ".DS_Store" -type f -delete'|home folder|documents folder|root folder|Remove_All_DS_Store_Files|${GY}This may be necessary if Finder views do not change after setting some preferences. '.DS_Store' files take precedence over global .plists, so deleting them will ensure new global preferences are used. .DS_Store files will regenerate upon opening a Finder window, so ensure that all Finder windows are closed before removing .DS_Store files, as well as setting new preferences. (Try choosing Deactivate to test this for the Documents folder only)${NC}"
-        "📁 Use Icon View by default|com.apple.finder|FXPreferredViewStyle|icnv|Nlsv|incv|writeResetValue|${GY}Sets Finder's default view to Icon View. (choosing Deactivate will set this to list view)${NC}"
-        "ℹ️  Show item info near icons|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:showItemInfo|true|false|false|IconView_variousSettings|"
-        "⤵️  Show item info below icons|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:labelOnBottom|true|false|true|IconView_variousSettings|${GY}(choosing Deactivate will show item info on the right, shifting icons to the left)${NC}"
-        "🔤 Sort and arrange icons by name|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:arrangeBy|name|none|none|IconView_variousSettings|${GY}If currently set to 'none', your arrangement will remain intact when choosing 'name', in case you wish to revert back. (Only removing .DS_Store files will forget your current arrangement)${NC}"
-        "📏 Set icon text size to 12|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:textSize|12.000000|14.000000|12.000000|IconView_variousSettings|${GY}(choosing Deactivate will set the text size to 14)${NC}"
-        "📏 Set icon size to 48|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:iconSize|48.000000|72.000000|64.000000|IconView_variousSettings|${GY}(choosing Deactivate will set the icon size to 72x72)${NC}"
-        "📐 Set icon grid spacing to 29|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:gridSpacing|29.000000|43.000000|54.000000|IconView_variousSettings|${GY}(choosing Deactivate will set the grid spacing to 43)${NC}"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📁 [Finder]|"
-        "🗂️  Always Show Tab Bar in Finder|com.apple.finder|NSWindowTabbingShoudShowTabBarKey-com.apple.finder.TBrowserWindow|true|false|false|writeResetValue|${GY}Shows the tab bar at the top of Finder windows by default${NC}"
-        "🗂️  Open folders in tabs instead of new windows|com.apple.finder|FinderSpawnTab|true|false|false|writeResetValue|"
-        "🏠 New Finder windows show the Desktop folder|com.apple.finder|NewWindowTarget|PfDe|PfHm|PfAF|writeResetValue|${GY}Sets new Finder windows to open the Desktop folder instead of Recents. (choosing Deactivate here will set it to the home folder)${NC}"
-        # "🏠 Set Desktop folder path for new Finder windows|com.apple.finder|NewWindowTargetPath|file://${HOME}/Desktop/|file://${HOME}/|||Sets new Finder windows to open the Desktop folder"
-        "🚫 Don't show Recent Tags in the Sidebar|com.apple.finder|ShowRecentTags|false|true|true|writeResetValue|"
-        # "🚫 Don't show 'Recents' in the sidebar|com.apple.finder|PreferencesWindow.LastSelection|SDBR|SDBR|TAGS|writeResetValue|"
-        "🛣️  Show Path Bar in Finder|com.apple.finder|ShowPathbar|true|false|false|writeResetValue|${GY}Shows the path bar at the bottom of Finder windows${NC}"
-        "📊 Show Status Bar in Finder|com.apple.finder|ShowStatusBar|true|false|false|writeResetValue|${GY}Shows the status bar at the bottom of Finder windows${NC}"
-        "📏 Shrink sidebar width to the minimum ${BL}(Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|${BL}(Tahoe 26+ only)${NC}"
-        # "📏 Shrink sidebar width to the minimum (2 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|Shrinks sidebar width (in other views) to the minimum"
-        "📏 Shrink sidebar width to the minimum ${MA}(Sequoia 15 and below)${NC}|com.apple.finder|SidebarWidth|143|164|164|ShrinkSideBarInSequoiaAndBelow|${MA}(Sequoia 15 and below only)${NC}"
-        # "📏 Shrink sidebar width to the minimum (2 of 2) ${MA}(Sequoia 15 and below)${NC}|com.apple.finder|FK_SidebarWidth|143|164|164|writeResetValue|Shrinks sidebar width (in other views) to the minimum"
-        "🏷️  Show all filename extensions|NSGlobalDomain|AppleShowAllExtensions|true|false|false|writeResetValue|${GY}Shows file extensions for all files${NC}"
-        "🚫 Disable the warning when changing a file extension|com.apple.finder|FXEnableExtensionChangeWarning|false|true|true|writeResetValue|"
-        "🚫 Hide Warning before removing from iCloud Drive ${MA}(Sequoia 15+)${NC}|com.apple.bird|com.apple.clouddocs.unshared.moveOut.suppress|1|0|0|delete|${MA}(Sequoia 15+ only)${NC}"
-        "🚫 Hide Warning before removing from iCloud Drive ${GY}${GR}(Sonoma 14 and below)${NC}|com.apple.finder|FXEnableRemoveFromICloudDriveWarning|0|1|1|writeResetValue|${GY}${GR}(Sonoma 14 and below only)${NC}"
-        "🔍 Search the current folder when performing a search|com.apple.finder|FXDefaultSearchScope|SCcf|SCev|SCev|writeResetValue|${GY}Uses the current (focused) folder when performing a search${NC}"
-        "📚 Show hidden User ~/Library folder by default|com.apple.FinderInfo|ShowLibrary|visible|hidden||chflags|${GY}Makes the User Library folder visible in Finder${NC}"
-        "👻 Show hidden files (or toggle them with ⇧⌘.)|com.apple.finder|AppleShowAllFiles|true|false|false|writeResetValue|${GY}(You can also show them temporarily with ⇧⌘.)${NC}"
-        # "🔍 Set Custom Get Info Pane Layout|com.apple.finder|FXInfoPanesExpanded|'{General=true;Comments=false;MetaData=true;Name=true;OpenWith=true;Preview=false;Privileges=true;}'|{}||defaults_dict|Sets Get Info pane expand/collapse"
-        # "🔍 Set Custom Toolbar Items|com.apple.finder|NSToolbar Configuration Browser|'{\"TB Default Item Identifiers\"=(\"com.apple.finder.BACK\",\"com.apple.finder.SWCH\",NSToolbarSpaceItem,\"com.apple.finder.ARNG\",\"com.apple.finder.SHAR\",\"com.apple.finder.LABL\",\"com.apple.finder.ACTN\",NSToolbarSpaceItem,\"com.apple.finder.SRCH\");\"TB Display Mode\"=2;\"TB Icon Size Mode\"=1;\"TB Is Shown\"=1;\"TB Item Identifiers\"=(\"com.apple.finder.BACK\",\"com.apple.finder.loc \",\"com.apple.finder.AirD\",\"com.apple.finder.CNCT\",\"com.apple.finder.NFLD\",\"com.apple.finder.SHAR\",\"com.apple.finder.SWCH\",NSToolbarSpaceItem,\"com.apple.finder.ACTN\",NSToolbarSpaceItem,\"com.apple.finder.SRCH\");\"TB Size Mode\"=1;}'|{}||defaults_dict|Sets Finder toolbar"    
+    if true; then    # only used here to quickly collapse array
+        declare -a preference_commands=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🆕 [NEW for ${BL}macOS Tahoe 26]${NC}|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🌑 Appearance: Enable dark mode on icons ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleIconAppearanceTheme|RegularDark|||darkmode|"
+                "🪟 Appearance: Enable tinted Liquid Glass ${BL}(Tahoe 26.1+)${NC}|NSGlobalDomain|NSGlassDiffusionSetting|true|false|false|writeResetValue|"
+                "📁 Appearance: Disable 'Tint Folders Based On Tags' ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleDisableTagBasedIconTinting|true|||delete|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🌑 ${GY}Appearance: Enable dark mode on icons (Tahoe 26+)${NC}|NSGlobalDomain|AppleIconAppearanceTheme|RegularDark|||darkmode|"
+                "🪟 ${GY}Appearance: Enable tinted Liquid Glass (Tahoe 26.1+)${NC}|NSGlobalDomain|NSGlassDiffusionSetting|true|false|false|writeResetValue|"
+                "📁 ${GY}Appearance: Disable 'Tint Folders Based On Tags' (Tahoe 26+)${NC}|NSGlobalDomain|AppleDisableTagBasedIconTinting|true|||delete|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 && "$MACOS_MINOR" -ge 4 ]]; then
+            preference_commands+=(
+                "🗜️  Archive Utility: Move archives to trash after expanding ${BL}(Tahoe 26.4+)${NC}|com.apple.archiveutility|dearchive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                "🗜️  Archive Utility: Move files to trash after archiving ${BL}(Tahoe 26.4+)${NC}|com.apple.archiveutility|archive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+            )
         
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|♿️ [Accessibility - Zoom]|⚠️  ${YE}(Terminal requires Full Disk Access to write changes)${NC}"
-        "🔎 Use keyboard shortcuts to zoom|com.apple.universalaccess|closeViewHotkeysEnabled|true|false|false|UniversalAccessNeedsFDA|${GY}Enables global zoom functionality via hot keys${NC}"
-        "🔎 Use trackpad gesture to zoom|com.apple.universalaccess|closeViewTrackpadGestureZoomEnabled|true|false|false|UniversalAccessNeedsFDA|"
-        "🔎 Zoom Continuously with Pointer|com.apple.universalaccess|closeViewPanningMode|false|true|false|UniversalAccessNeedsFDA|"
-        "🔎 Zoom Each Display Independently ${GY}${GR}(Sonoma 14+)${NC}|com.apple.universalaccess|closeViewZoomIndividualDisplays|true|false|false|UniversalAccessNeedsFDA|"
-        "🔎 Show Zoomed Image While Screen Sharing ${MA}(Sequoia 15+)${NC}|com.apple.universalaccess|closeViewZoomScreenShareEnabledKey|true|false|false|UniversalAccessNeedsFDA|"
-        "🔎 Follow keyboard focus 'Always'|com.apple.universalaccess|closeViewZoomFocusFollowModeKey|1|2|2|UniversalAccessNeedsFDA|${GY}Zoom always follows keyboard focus when typing${NC}"
-        "🔎 Move screen image so focus item is centered|com.apple.universalaccess|closeViewZoomFocusMovement|false|true|true|UniversalAccessNeedsFDA|"
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🗜️  ${GY}Archive Utility: Move archives to trash after expanding (Tahoe 26.4+)${NC}|com.apple.archiveutility|dearchive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                "🗜️  ${GY}Archive Utility: Move files to trash after archiving (Tahoe 26.4+)${NC}|com.apple.archiveutility|archive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "📁 Finder: Shrink sidebar width to the minimum ${BL}(Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                # "📏 Shrink sidebar width to the minimum (2 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                "💬 Messages: Screen Unknown Senders ${BO}(FDA req. to read/write)${NC} ${BL}(Tahoe 26+)${NC}|com.apple.MobileSMS|FilterMessageRequests|true|false|false|writeResetValue|"
+                "📋 Menu Bar: Never Hide Menu Bar In Fullscreen ${BL}(Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
+                "📋 Menu Bar: Show Menu Bar Background ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "📁 ${GY}Finder: Shrink sidebar width to the minimum (Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                # "📏 ${GY}Shrink sidebar width to the minimum (2 of 2) (Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                "💬 ${GY}Messages: Screen Unknown Senders (FDA req. to read/write) (Tahoe 26+)${NC}|com.apple.MobileSMS|FilterMessageRequests|true|false|false|writeResetValue|"
+                "📋 ${GY}Menu Bar: Never Hide Menu Bar In Fullscreen (Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
+                "📋 ${GY}Menu Bar: Show Menu Bar Background (Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 && "$MACOS_MINOR" -ge 2 ]]; then
+            preference_commands+=(
+                "📋 Menu Bar: Show Timer in Menu Bar ${BL}(Tahoe 26.2+)${NC}|com.apple.controlcenter|Timer|16|0|0|-currentHost|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "📋 ${GY}Menu Bar: Show Timer in Menu Bar (Tahoe 26.2+)${NC}|com.apple.controlcenter|Timer|16|0|0|-currentHost|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🔑 Passwords: Disallow Contacting Websites ${BL}(Tahoe 26+)${NC}|com.apple.Passwords|WBSPasswordsAppBackgroundNetworkingEnabled|false|true|true|writeResetValue|${GY}Prevents network telemetry with websites from saved passwords. (This is how icons and names get shown)${NC}"
+                "📞 Phone: Filter Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|filterUnknownCallersAsNewCallers|true|false|true|writeResetValue|"
+                "📞 Phone: Screen Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|ReceptionistDisabled|false|true|false|writeResetValue|${GY}Toggles on 'Ask Reason for Calling'${NC}"
+                "📞 Phone: Enable Hold Assist ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|HoldAssistDetectionEnabled|true|false|true|writeResetValue|"
+                "📞 Phone: Enable Live Voicemail ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|CallScreeningDisabled|false|true|false|writeResetValue|"
+                "✏️  Preview: Show Markup toolbar for images by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|writeResetValue|"
+                "✏️  Preview: Show Markup toolbar for PDFs by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🔑 ${GY}Passwords: Disallow Contacting Websites (Tahoe 26+)${NC}|com.apple.Passwords|WBSPasswordsAppBackgroundNetworkingEnabled|false|true|true|writeResetValue|${GY}Prevents network telemetry with websites from saved passwords. (This is how icons and names get shown)${NC}"
+                "📞 ${GY}Phone: Filter Unknown Callers (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|filterUnknownCallersAsNewCallers|true|false|true|writeResetValue|"
+                "📞 ${GY}Phone: Screen Unknown Callers (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|ReceptionistDisabled|false|true|false|writeResetValue|${GY}Toggles on 'Ask Reason for Calling'${NC}"
+                "📞 ${GY}Phone: Enable Hold Assist (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|HoldAssistDetectionEnabled|true|false|true|writeResetValue|"
+                "📞 ${GY}Phone: Enable Live Voicemail (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|CallScreeningDisabled|false|true|false|writeResetValue|"
+                "✏️  ${GY}Preview: Show Markup toolbar for images by default (Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|writeResetValue|"
+                "✏️  ${GY}Preview: Show Markup toolbar for PDFs by default (Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|writeResetValue|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 && "$MACOS_MINOR" -ge 4 ]] || [[ "$MACOS_MAJOR" -le 15 ]]; then
+            preference_commands+=(
+                "🗂️  Safari: Disable compact tab layout ${MA}(Sequoia 15 & below)${NC} or ${BL}(Tahoe 26.4+)${NC}|com.apple.Safari|ShowStandaloneTabBar|true|false|true|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🗂️  ${GY}Safari: Disable compact tab layout (Sequoia 15 & below) or (Tahoe 26.4+)${NC}|com.apple.Safari|ShowStandaloneTabBar|true|false|true|writeResetValue|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🗂️  Safari: Show Color in Tab Bar ${BL}(Tahoe 26+)${NC}|com.apple.Safari|NeverUseBackgroundColorInToolbar|false|true|false|writeResetValue|${GY}(On by default)${NC}"
+                "🔍 Spotlight: Disable all default results (except System Settings & Apps) ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Remove various apps/items|||ReduceSpotlightResultsInTahoe|${GY}Note that more apps may show up here later on once using them. In that case, this preference may inadvertently affect new apps that show up here. (Intended for fresh installs)${NC}"
+                "🔍 Spotlight: Disable 'Show Related Content' ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Custom.relatedContents|||DisableSpotlightRelatedContent|"
+                "🔍 Spotlight: Enable Clipboard Manager ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryEnabled|true|false|false|writeResetValue|"
+                "🔍 Spotlight: Increase Clipboard history from 8hrs to 7 days ${BL}(Tahoe 26.1+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|604800|28800|28800|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🗂️  ${GY}Safari: Show Color in Tab Bar (Tahoe 26+)${NC}|com.apple.Safari|NeverUseBackgroundColorInToolbar|false|true|false|writeResetValue|${GY}(On by default)${NC}"
+                "🔍 ${GY}Spotlight: Disable all default results (except System Settings & Apps) (Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Remove various apps/items|||ReduceSpotlightResultsInTahoe|${GY}Note that more apps may show up here later on once using them. In that case, this preference may inadvertently affect new apps that show up here. (Intended for fresh installs)${NC}"
+                "🔍 ${GY}Spotlight: Disable 'Show Related Content' (Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Custom.relatedContents|||DisableSpotlightRelatedContent|"
+                "🔍 ${GY}Spotlight: Enable Clipboard Manager (Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryEnabled|true|false|false|writeResetValue|"
+                "🔍 ${GY}Spotlight: Increase Clipboard history from 8hrs to 7 days (Tahoe 26.1+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|604800|28800|28800|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🖱️  [Mouse]|"
+            "🚫 Disable Natural Scrolling ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|com.apple.swipescrolldirection|false|true|true|writeResetValue|"
+            "🚀 Increase Tracking Speed beyond fastest setting ${BO}(Requires Restart)${NC}|NSGlobalDomain|com.apple.mouse.scaling|4|5|3.0|writeResetValue|"
+            "🖱️  Enable secondary button (on bluetooth multi-touch mice)|com.apple.driver.AppleBluetoothMultitouch.mouse|MouseButtonMode|TwoButton|OneButton|OneButton|writeResetValue|"
+            "🚫 Disable 'Shake mouse pointer to locate' ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|CGDisableCursorLocationMagnification|true|false|true|writeResetValue|"
+            "🚫 Disable the 'Mouse Keys' keyboard shortcut ${BO}(FDA req. to write changes)${NC}|com.apple.universalaccess|useMouseKeysShortcutKeys|true|false|true|DisableMouseKeys|${GY}Prevents 'Mouse Keys' from getting triggered when pressing the option key 5 times in a row.${NC}"
+            # "🚫 Disable 'Mouse Keys'|com.apple.universalaccess|mouseDriver|true|false|true|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📋 [Menu Bar]|${GY}(To prevent clutter, hide all and just use Control Center) 👍${NC}"
-        "📋 Show Menu Bar Background ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
-        "🖥️  Never Hide Menu Bar In Fullscreen ${BL}(Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
-        "🖥️  Never Hide Menu Bar In Fullscreen ${MA}(Sequoia 15 and below)${NC}|NSGlobalDomain|AppleMenuBarVisibleInFullscreen|true|false|false|writeResetValue|"
-        # "🍱 Show Control Center in Menu Bar|com.apple.controlcenter|NSStatusItem Visible BentoBox|true|false|true|delete|Shows Control Center in the menu bar"
-        # "🕒 Always show date in menu bar|com.apple.menuextra.clock|ShowDate|true|false|true|writeResetValue|"
-        "🕒 Display the time with seconds|com.apple.menuextra.clock|ShowSeconds|true|false|false|writeResetValue|"
-        "🔍 Show Spotlight in Menu Bar|com.apple.controlcenter|Spotlight|2|8|2|-currentHost|"
-        # "🔮 Show Siri in Menu Bar|com.apple.controlcenter|Siri|2|8|2|-currentHost|"
-        "🔑 Show Passwords In Menu Bar ${MA}(Sequoia 15+)${NC}|com.apple.Passwords|EnableMenuBarExtra|true|false|false|PasswordManager|${GY}Please enable manually the first time in order to start the Passwords background item/service)${NC}"
-        "🛜 Show WiFi in Menu Bar|com.apple.controlcenter|WiFi|2|8|8|-currentHost|"
-        "🔵 Show Bluetooth in Menu Bar [Always]|com.apple.controlcenter|Bluetooth|2|8|8|-currentHost|"
-        "🌀 Show AirDrop in Menu Bar [Always]|com.apple.controlcenter|AirDrop|2|8|8|-currentHost|"
-        "📵 Show Focus in Menu Bar [Always]|com.apple.controlcenter|FocusModes|18|8|2|-currentHost|"
-        "🚀 Show Stage Manager in Menu Bar [Always] ${MA}(Sequoia 15 and below)${NC}|com.apple.controlcenter|StageManager|2|8|8|-currentHost|"
-        "🖥️  Show Screen Mirroring in Menu Bar [Always]|com.apple.controlcenter|ScreenMirroring|18|8|2|-currentHost|"
-        "🖥️  Show Display in Menu Bar [Always]|com.apple.controlcenter|Display|18|8|2|-currentHost|"
-        "🔊 Show Sound in Menu Bar [Always]|com.apple.controlcenter|Sound|18|8|2|-currentHost|"
-        "🚀 Show Now Playing in Menu Bar [Always]|com.apple.controlcenter|NowPlaying|18|8|2|-currentHost|"
-        "♿️ Show Accessibility in Menu Bar|com.apple.controlcenter|AccessibilityShortcuts|3|9|9|-currentHost|"
-        "📣 Show Music Recognition in Menu Bar|com.apple.controlcenter|MusicRecognition|6|12|12|-currentHost|"
-        "🦻 Show Hearing in Menu Bar|com.apple.controlcenter|Hearing|2|8|8|-currentHost|"
-        "🎤 Show Voice Control in Menu Bar|com.apple.controlcenter|VoiceControl|18|8|8|-currentHost|"
-        "👤 Show Fast User Switching in Menu Bar|com.apple.controlcenter|UserSwitcher|2|8|8|-currentHost|"
-        "⚡️ Show Low Power Mode in Menu Bar ${MA}(Sequoia 15+)${NC}|com.apple.controlcenter|EnergyModeModule|9|19|19|-currentHost|"
-        "🔤 Show Text Input in Menu Bar|com.apple.TextInputMenu|visible|true|false|false|writeResetValue|"
-        "⏳ Show Time Machine in Menu Bar|com.apple.systemuiserver|NSStatusItem Visible com.apple.menuextra.TimeMachine|true|false|false|Show_Time_Machine_Menu_Bar_Item|"
-        "⏰ Show Timer in Menu Bar ${BL}(Tahoe 26.2+)${NC}|com.apple.controlcenter|Timer|16|0|0|-currentHost|"
-        "⏳ Show VPN in Menu Bar|com.apple.systemuiserver|NSStatusItem Visible com.apple.menuextra.vpn|true|false|false|Show_VPN_Menu_Bar_Item|${GY}Must first be configured to appear. (System Settings > Network > VPN & Filters)${NC}"
-        # "🚀 Show Shortcuts in Menu Bar|com.apple.controlcenter|NSStatusItem Visible Shortcuts|true|false|||"
-        # "🎥 Show FaceTime in Menu Bar|com.apple.controlcenter|NSStatusItem Visible FaceTime|true|false|||"
-        # "⛅️ Show Weather in Menu Bar ${MA}(macOS Sequoia 15+)${NC}|com.apple.controlcenter|Weather|2|8|8|-currentHost|"
-        "🕹️  Show Remote Management in Menu Bar|/Library/Preferences/com.apple.RemoteManagement|LoadRemoteManagementMenuExtra|true|false|false|Remote_Management_Menu_Bar|${GY}Must first be enabled to appear. (System Settings > General > Sharing > Remote Management)${NC}"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            # "GROUP|💻 [TrackPad - Built-In]|"
+            "GROUP|💻 [TrackPad]|"
+            "💨 Increase Tracking Speed|NSGlobalDomain|com.apple.trackpad.scaling|3|0.5|0.5|writeResetValue|${GY}Increases to fastest default setting${NC}"
+            # "⚙️  Enable Tap to click|com.apple.AppleMultitouchTrackpad|Clicking|1|0||delete|Enables 'Tap to click' on built-in Trackpads"
+            # "⚙️  Enable Tap to click (in login screen)|NSGlobalDomain|com.apple.mouse.tapBehavior|1|0||-currentHost|Enables 'Tap to click' on built-in Trackpads (in login screen)."
+            "⚙️  Enable Tap To Click|NSGlobalDomain|com.apple.mouse.tapBehavior|1|0|0|-currentHost|"
+            "⚙️  Enable Two-Finger Tap To Right Click AND Bottom Right Click ${BO}(Requires Logging Out)${NC}|Various|Various|true|false|false|Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click|${GY}Enables both of these settings. (Note that System Settings will show only 'Click in Bottom Right Corner' selected, but 'Click or Tap with Two Fingers' is also applied!)${NC}"
+            # "⚙️  Enable secondary click|NSGlobalDomain|com.apple.trackpad.enableSecondaryClick|true|false||-currentHost|Enables bottom-right right-click on built-in Trackpads (in login screen)."
+            # "⚙️  Enable two-finger tap to right-click|com.apple.AppleMultitouchTrackpad|TrackpadRightClick|true|false|||Enable two-finger right-click on built-in Trackpads"
+            # "⚙️  Enable corner right-click (disables 'tap to right-click')|NSGlobalDomain|com.apple.trackpad.trackpadCornerClickBehavior|1|0||-currentHost|Enables corner right-click on built-in Trackpads (in login screen)."
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📋 [Menu Bar - For Laptops]|"
-        "🔋 Show Battery in Menu Bar|com.apple.controlcenter|Battery|3|9|9|-currentHost|"
-        "💯 Show Battery Percentage in Menu Bar|com.apple.controlcenter|BatteryShowPercentage|1|0|0|-currentHost|"
-        "⌨️  Show Keyboard Brightness in Menu Bar|com.apple.controlcenter|KeyboardBrightness|3|9|9|-currentHost|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            # "GROUP|💻 [TrackPad - External/Bluetooth|"
+            # "⚙️  Enable Tap to click|com.apple.driver.AppleBluetoothMultitouch.trackpad|Clicking|1|0|||Enables 'Tap to click' on bluetooth Trackpads"
+            # "⚙️  Enable two-finger tap to right-click|com.apple.driver.AppleBluetoothMultitouch.trackpad|TrackpadRightClick|1|0|||Enable two-finger right-click on bluetooth Trackpads"
+            # "⚙️  Enable pinch-to-zoom|com.apple.driver.AppleBluetoothMultitouch.trackpad|TrackpadPinch|1|0|||Enables pinch-to-zoom on bluetooth Trackpads"
+            # "⚙️  Enable corner right-click (disables 'tap to right-click')|com.apple.driver.AppleBluetoothMultitouch.trackpad|TrackpadCornerSecondaryClick|0|1|||Enables corner right-click on bluetooth Trackpads (disables tap to right click)"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📶 [Connectivity]|"
-        "🚫 Disable Universal Control|com.apple.universalcontrol|Disable|1|delete|delete|-currentHost|"
-        "🚫 Disable AirPlay Receiver|com.apple.controlcenter|AirplayReceiverEnabled|false|true|true|-currentHost|"
-        "🚫 Prevent Photos from opening automatically when devices are plugged in|com.apple.ImageCapture|disableHotPlug|true|false|false|-currentHost|"
-        "🌐 ${GY}Enable AirDrop over Ethernet on unsupported Macs${NC} ${GY}${RE}(depreciated)${NC}|com.apple.NetworkBrowser|BrowseAllInterfaces|true|false|false|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🔍 [Spotlight]|"
-        # "🚫 Disable Indexing for Custom Items (When using FindAnyFile)|com.apple.spotlight|orderedItems|'{\"enabled\"=1;\"name\"=\"APPLICATIONS\";}' '\"{\"enabled\"=0;\"name\"=\"MENU_EXPRESSION\";}\" … (etc)’||defaults_array|Sets Spotlight orderedItems"
-        "🚫 Disable all default results (except System Settings & Apps) ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Various Apps/Items|||ReduceSpotlightResultsInTahoe|${GY}Note that more apps may show up here later on once using them. In that case, this preference may inadvertently affect new apps that show up here. (Intended for fresh installs)${NC}"
-        # "🚫 Disable all default results (except System Settings & Apps) ${MA}(Sequoia 15 and below)${NC}|com.apple.Spotlight|orderedItems|Various Apps/Items|||ReduceSpotlightResultsInSequoia|"    # Not quite working yet
-        "🚫 Disable 'Show Related Content' ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Custom.relatedContents|||DisableSpotlightRelatedContent|"
-        "🚫 Disable 'Help Apple Improve Search' ${MA}(Sequoia 15+)${NC}|com.apple.assistant.support|Search Queries Data Sharing Status|2|1|1|writeResetValue|"
-        "🔍 Enable Clipboard Manager ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryEnabled|true|false|false|writeResetValue|"
-        "🔍 Increase Clipboard history from 8hrs to 7 days ${BL}(Tahoe 26.1+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|604800|28800|28800|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🔄 [Automatic Updates]|"
-        # "OLD=🚫 Disable macOS Auto-Update|softwareupdate|schedule|off|on||sudo|"
-        "🔄 Automatically Download macOS Updates|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticDownload|true|false||SoftwareUpdates|"
-        "🔄 Automatically Install macOS Updates|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticallyInstallMacOSUpdates|true|false||SoftwareUpdates|"
-        "🔄 Automatically Install Config Data|/Library/Preferences/com.apple.SoftwareUpdate|ConfigDataInstall|true|false||SoftwareUpdates|"
-        "🔄 Automatically Install Critical Updates|/Library/Preferences/com.apple.SoftwareUpdate|CriticalUpdateInstall|true|false||SoftwareUpdates|"
-        "🔄 ${GY}Automatically Check for macOS Updates${NC} ${GY}${RE}(depreciated)${NC}|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticCheckEnabled|true|false||SoftwareUpdates|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🤖 [Apple Intelligence]|"
-        "🚫 Disable Apple Intelligence ${MA}(Sequoia 15.1+)${NC}|com.apple.CloudSubscriptionFeatures.optIn|Dynamic (check yours with 'defaults read com.apple.CloudSubscriptionFeatures.optIn')|false|true|false|disable_Apple_Intelligence|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🔑 [Passwords]|"
-        "🔑 Show Passwords In Menu Bar ${MA}(Sequoia 15+)${NC}|com.apple.Passwords|EnableMenuBarExtra|true|false|false|PasswordManager|${GY}Please enable manually the first time in order to start the Passwords background item/service)${NC}"
-        "🚫 Disallow Contacting Websites ${BL}(Tahoe 26+)${NC}|com.apple.Passwords|WBSPasswordsAppBackgroundNetworkingEnabled|false|true|true|writeResetValue|${GY}Prevents network telemetry with websites from saved passwords. (This is how icons and names get shown)${NC}"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📝 [TextEdit]|"
-        "🗂️  Always show Tab Bar in TextEdit|com.apple.TextEdit|NSWindowTabbingShoudShowTabBarKey-NSWindow-DocumentWindowController-DocumentWindowController-VT-FS|true|false|false|writeResetValue|"
-        "📝 Create a new document by default when opening TextEdit|com.apple.TextEdit|NSShowAppCentricOpenPanelInsteadOfUntitledFile|false|true|false|writeResetValue|${GY}Opens a blank document immediately instead of the open files panel.${NC}"
-        "📝 Use Plain Text Mode for TextEdit|com.apple.TextEdit|RichText|false|true|true|writeResetValue|${GY}Sets TextEdit to use Plain Text instead of Rich Text by default${NC}"
-        "📂 Set Default Font Size in TextEdit to 14|com.apple.TextEdit|NSFixedPitchFontSize|14|12|11|writeResetValue|${GY}(Choosing Deactivate sets the font size to 12)${NC}"
-        "📂 Expand Save Panel by Default (1 of 3)|com.apple.TextEdit|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
-        "📂 Expand Save Panel by Default (2 of 3)|com.apple.TextEdit|NSNavPanelExpandedStateForSaveMode2|true|false|false|writeResetValue|"
-        "📂 Expand Save Panel by Default (3 of 3)|com.apple.TextEdit|NSNavPanelFileLastListModeForSaveModeKey|2|1|1|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|👾 [Terminal]|⚠️  ${YE}(Must quit Terminal afterwards to reflect changes)${NC}"
-        "🗂️  Always show Tab Bar in Terminal|com.apple.Terminal|NSWindowTabbingShoudShowTabBarKey-TTWindow-TTWindowController-TTWindowController-VT-FS|true|false|false|writeResetValue|"
-        "🪟 Sets 'Basic' as the startup profile|com.apple.Terminal|Startup Window Settings|Basic|Clear Dark|Clear Dark|writeResetValue|${GY}Sets the startup Terminal window to 'Basic' instead of 'Clear Dark'${NC}"
-        "🪟 Sets 'Basic' as the default profile|com.apple.Terminal|Default Window Settings|Basic|Clear Dark|Clear Dark|writeResetValue|${GY}Sets the default Terminal window to 'Basic' instead of 'Clear Dark'${NC}"
-        "⭐️ Use bright colors for bold text ${GY}(must enable manually)${NC}|com.apple.Terminal|UseBrightBold|true|false|reset|UseBrightBoldInTerminal|${GY}This will be applied to only the window profiles that are currently set as your default. Note: Making this Active will currently fail. Please enable manually. Deactivate, Reset to Default and displaying state/value works as expected.${NC}"
-        "📂 Expand Save Panels by default in Terminal|com.apple.Terminal|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
-
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        # "GROUP|📊 [Activity Monitor]|"
-        # "🔄 Set Update Frequency to 1 Sec|com.apple.ActivityMonitor|UpdatePeriod|1|2|5|writeResetValue|"
-        # "🔄 Set Update Frequency to 1 Sec|com.apple.ActivityMonitor|UpdatePeriod|1|2|5|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|⌨️  [Keyboard]|"
+            # "💨 Speed Up Initial Key Repeat Rate ${BO}(Requires logging out)${NC}|NSGlobalDomain|KeyRepeat|2|6|6|writeResetValue|${GY}Speeds up the repeat of pressed keys.${NC}"
+            "💨 Increase Initial Key Repeat Rate beyond fastest setting ${BO}(Requires logging out)${NC}|NSGlobalDomain|KeyRepeat|1.5|2|6|writeResetValue|${GY}Speeds up the repeat of pressed keys. (A rate of '2' is the fastest setting in System Settings)${NC} "
+            # "💨 Speed Up Delay Until Key Repeat ${BO}(Requires logging out)${NC}|NSGlobalDomain|InitialKeyRepeat|15|25|25|writeResetValue|${GY}Speeds up the delay until pressed keys are repeated.${NC}"
+            "💨 Increase Delay Until Key Repeat beyond fastest setting ${BO}(Requires logging out)${NC}|NSGlobalDomain|InitialKeyRepeat|13|15|25|writeResetValue|${GY}Speeds up the delay until pressed keys are repeated. (A rate of '15' is the shortest setting in System Settings)${NC}"
+            "↔️  Allow tab navigation across UI|NSGlobalDomain|AppleKeyboardUIMode|2|0|2|writeResetValue|${GY}Enables full keyboard access for all UI controls${NC}"
+            "🚫 Disable auto-capitalization|NSGlobalDomain|NSAutomaticCapitalizationEnabled|false|true|true|writeResetValue|"
+            "🚫 Disable auto-correct|NSGlobalDomain|NSAutomaticSpellingCorrectionEnabled|false|true|true|writeResetValue|"
+            "🚫 Disable auto-period substitution|NSGlobalDomain|NSAutomaticPeriodSubstitutionEnabled|false|true|true|writeResetValue|"
+            "😌 Fn/🌐 key Shows Emoji & Symbols ${BO}(Requires logging out)${NC}|com.apple.HIToolbox|AppleFnUsageType|2|3|2|KeyboardFunctionKey|${GY}(On by default now in recent macOS versions)${NC}"
+            "🚫 Disable accent options when a key is held down ${BO}(Requires logging out)${NC}|NSGlobalDomain|ApplePressAndHoldEnabled|false|true|true|writeResetValue|"
+            "🌐 Use F1, F2, etc. keys as standard function keys ${BO}(Requires logging out)${NC}|NSGlobalDomain|com.apple.keyboard.fnState|true|false|false|writeResetValue|${GY}When this option is selected, press the fn key to use the special features printed on each key.${NC}"
 
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📅 [Calendar]|"
-        "🕛 Enable TimeZone Support|com.apple.iCal|TimeZone support enabled|true|false|false|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|⌨️  [Keyboard Shortcuts]|"
+            "🌎 Global: Sets ⌥⌘ +L/R arrows to Show Previous/Next Tab|NSGlobalDomain|NSUserKeyEquivalents|'{\"Show Previous Tab\" = \"@~\\U2190\"; \"Show Next Tab\" = \"@~\\U2192\"}'|delete \"Show Next Tab\"; \"Show Previous Tab\"|delete \"Show Next Tab\"; \"Show Previous Tab\"|KeyboardShortcuts|${GY}Sets ⌥⌘ + left/right arrow keys to show next/previous tabs (supported in most apps).${NC} ${BO}This requires logging out to take effect${NC}"        
+            "📁 Finder: Swaps the default shortcuts for Get Info and Show/Hide Inspector|com.apple.finder|NSUserKeyEquivalents|'{\"Get Info\" = \"@~i\"; \"Show Inspector\" = \"@i\"; \"Hide Inspector\" = \"@i\"}'|delete \"Get Info\"; \"Show Inspector\"; \"Hide Inspector\"|delete \"Get Info\"; \"Show Inspector\"; \"Hide Inspector\"|KeyboardShortcuts|${GY}Swaps default Get Info shortcut (⌘I) with Show/Hide Inspector shortcut (⌘⌥I). (Show Inspector refreshes the info panel once another file is selected, unlike Get Info)${NC}"
+            "🔎 Preview: Sets ⌥⌘M to toggle the Markup Toolbar|com.apple.Preview|NSUserKeyEquivalents|'{\"Hide Markup Toolbar\" = \"@~m\"; \"Show Markup Toolbar\" = \"@~m\"}'|delete \"Hide Markup Toolbar\"; \"Show Markup Toolbar\"|delete \"Hide Markup Toolbar\"; \"Show Markup Toolbar\"|KeyboardShortcuts|"
+            "📝 TextEdit: Swaps the default shortcuts for New and Show Fonts|com.apple.TextEdit|NSUserKeyEquivalents|'{\"New\" = \"@t\"; \"Show Fonts\" = \"@n\"}'|delete \"New\"; \"Show Fonts\"|delete \"New\"; \"Show Fonts\"|KeyboardShortcuts|${GY}For new documents and tabs, this will use ⌘T (like most apps) instead of ⌘N${NC}"
+            "🔎 Find Any File: Swaps the default shortcuts for Rename and Reveal In Finder|org.tempel.findanyfile|NSUserKeyEquivalents|'{\"Rename\" = \"@r\"; \"Reveal in Finder\" = \"@e\"}'|delete \"Rename\"; \"Reveal in Finder\"|delete \"Rename\"; \"Reveal in Finder\"|KeyboardShortcuts|"
+            "📦 Suspicious Package: Sets ⌥⌘ + L/R arrows for Show Previous/Next Tab|com.mothersruin.SuspiciousPackageApp|NSUserKeyEquivalents|'{\"Show Previous Tab\" = \"@~\\U2190\"; \"Show Next Tab\" = \"@~\\U2192\"}'|delete \"Show Next Tab\"; \"Show Previous Tab\"|delete \"Show Next Tab\"; \"Show Previous Tab\"|KeyboardShortcuts|"
+            "📦 Suspicious Package: Sets ⌥⌘ + '[' or ']' for Previous/Next Tab in Package|com.mothersruin.SuspiciousPackageApp|NSUserKeyEquivalents|'{\"Next Tab in Package\" = \"@~\U005D\"; \"Previous Tab in Package\" = \"@~\U005B\"}'|delete \"Next Tab in Package\"; \"Previous Tab in Package\"|delete \"Next Tab in Package\"; \"Previous Tab in Package\"|KeyboardShortcuts|"
+            "📦 Apparency: Sets ⌥⌘ + L/R arrows for Show Previous/Next Tab|com.mothersruin.Apparency|NSUserKeyEquivalents|'{\"Show Previous Tab\" = \"@~\\U2190\"; \"Show Next Tab\" = \"@~\\U2192\"}'|delete \"Show Next Tab\"; \"Show Previous Tab\"|delete \"Show Next Tab\"; \"Show Previous Tab\"|KeyboardShortcuts|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|💬 [Messages]|"
-        "💬 Screen Unknown Senders ${BL}(Tahoe 26+)${NC}|com.apple.MobileSMS|FilterMessageRequests|true|false|false|writeResetValue|"
-        "🚫 Disable Send Read Receipts|com.apple.imagent|Setting.EnableReadReceipts|false|true|true|DisableSendReadReceiptsIniMessage|"
-        # "🚫 Disable Send Read Receipts 2 of 2|com.apple.imagent|Setting.GlobalReadReceiptsVersionID|2|1|1|DisableSendReadReceiptsIniMessage|"
-        "💬 Disable Automatic Sharing|com.apple.SocialLayer|SharedWithYouEnabled|false|true|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|💾 [Disks]|"
+            "💾 Show internal hard disks on desktop|com.apple.finder|ShowHardDrivesOnDesktop|true|false|false|writeResetValue|"
+            "💾 Show external hard disks on desktop|com.apple.finder|ShowExternalHardDrivesOnDesktop|true|false|false|writeResetValue|"
+            "💾 Show removable media on desktop|com.apple.finder|ShowRemovableMediaOnDesktop|true|false|false|writeResetValue|${GY}(for legacy CDs, DVDs and iPods)${NC}"
+            "💾 Show mounted servers on desktop|com.apple.finder|ShowMountedServersOnDesktop|true|false|false|writeResetValue|"
+            "💾 Show all devices in Disk Utility|com.apple.DiskUtility|SidebarShowAllDevices|true|false|false|writeResetValue|${GY}Shows all devices instead of only volumes${NC}"
+            "💾 Show APFS Snapshots in Disk Utility|com.apple.DiskUtility|WorkspaceShowAPFSSnapshots|true|false|false|writeResetValue|"
+            "🚫 Disable new disk requests for Time Machine|com.apple.TimeMachine|DoNotOfferNewDisksForBackup|true|false|false|writeResetValue|"
+            "🔄 Set Time Machine backup frequency to 'Manually'|/Library/Preferences/com.apple.TimeMachine|AutoBackup|false|true|true|writeResetValue|${GY}Setting this to 'manually' prevents Time Machine snapshots from taking up disk space${NC}"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🔎 [Preview]|"
-        "🗂️  Always show Tab Bar in Preview|com.apple.Preview|NSWindowTabbingShoudShowTabBarKey-PVWindow-PVWindowController-PVWindowController-VT-FS|true|false|false|writeResetValue|"
-        "✏️  Show Markup toolbar for images by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|writeResetValue|"
-        "✏️  Show Markup toolbar for PDFs by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|writeResetValue|"
-        "📂 Expand Save Panels by default in Preview|com.apple.Preview|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|⚓️ [Dock]|"
+            "🗑️  Wipe all app icons from Dock ${BO}(for fresh installs)${NC}|com.apple.dock|persistent-apps|-array|||delete|${GY}Activating this will wipe ALL dock icons.${NC}"
+            "📏 Set Dock size to 38|com.apple.dock|tilesize|38|48|48|writeResetValue|"
+            "⬅️  Position dock on left of screen (or bottom/right)|com.apple.dock|orientation|left|right|bottom|writeResetValue|${GY}Choosing Deactivate here will show the dock on the right${NC}"
+            "⚡ Minimize windows using Scale effect instead of Genie|com.apple.dock|mineffect|scale|genie|genie|writeResetValue|"
+            "📥 Minimize windows into their application icon|com.apple.dock|minimize-to-application|true|false|false|writeResetValue|"
+            "🫥 Automatically hide and show the dock|com.apple.dock|autohide|true|false|false|writeResetValue|"
+            "⚡ Make the dock appear faster|com.apple.dock|autohide-time-modifier|0.0|0.5|0.5|writeResetValue|${GY}Initial Auto-hide must be enabled${NC}"
+            "⚡ Make the dock disappear faster|com.apple.dock|autohide-delay|0|0.2|0.2|writeResetValue|${GY}Initial Auto-hide must be enabled${NC}"
+            "🏀 Animate opening applications|com.apple.dock|launchanim|true|false|true|writeResetValue|${GY}(On by default). Disabling this removes the bouncing icon indicator upon launch${NC}"
+            "⚪️ Show indicator lights for open apps|com.apple.dock|show-process-indicators|true|false|true|writeResetValue|${GY}(On by default now in recent macOS versions)${NC}"
+            "👻 Dim Dock Icons of Hidden Apps|com.apple.dock|showhidden|true|false|false|writeResetValue|${GY}Helps differentiate between apps that are hidden vs shown${NC}"
+            "🚫 Disable Recent Items in Dock|com.apple.dock|show-recents|false|true|false|writeResetValue|"
+            "💨 Speed Up Drag and Drop Spring Delay on Dock items|com.apple.dock|enable-spring-load-actions-on-all-items|false|true|true|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📞 [Phone]|"
-        "📞 Enable Hold Assist ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|HoldAssistDetectionEnabled|true|false|true|writeResetValue|"
-        "📞 Enable Live Voicemail ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|CallScreeningDisabled|false|true|false|writeResetValue|"
-        "📞 Screen Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|ReceptionistDisabled|false|true|false|writeResetValue|${GY}Toggles on 'Ask Reason for Calling'${NC}"
-        "📞 Filter Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|filterUnknownCallersAsNewCallers|true|false|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|⛶  [Hot Corners]|"
+            "🚫 Disable the default bottom right 'Quick Note' Hot Corner|com.apple.dock|wvous-br-corner|1|14|14|writeResetValue|"
+            "⏾  Enable the bottom right 'Put Display to Sleep' Hot Corner|com.apple.dock|wvous-br-corner|10|1|14|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🎵 [Music]|"
-        "🚫 Disable Sound Check/Normalization|com.apple.Music|optimizeSongVolume|false|true|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🖥️  [Desktop, Widgets & Views]|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 14 ]]; then
+            preference_commands+=(
+                "🚫 Disable 'click wallpaper to show Desktop' ${GY}${GR}(Sonoma 14+)${NC}|com.apple.WindowManager|EnableStandardClickToShowDesktop|false|true|true|writeResetValue|"
+                # "🗑️  Wipe all widgets from Desktop ${GY}${GR}(Sonoma 14+)${NC} ${BO}(for fresh installs)${NC}|com.apple.notificationcenterui|widgets|-array|||WipeAllDesktopWidgets|"
+                "🖥️  Show widgets on Desktop ${GY}${GR}(Sonoma 14+)${NC}|com.apple.WindowManager|StandardHideWidgets|false|true|true|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Disable 'click wallpaper to show Desktop' (Sonoma 14+)${NC}|com.apple.WindowManager|EnableStandardClickToShowDesktop|false|true|true|writeResetValue|"
+                # "🗑️  ${GY}Wipe all widgets from Desktop (Sonoma 14+) (for fresh installs)${NC}|com.apple.notificationcenterui|widgets|-array|||WipeAllDesktopWidgets|"
+                "🖥️  ${GY}Show widgets on Desktop (Sonoma 14+)${NC}|com.apple.WindowManager|StandardHideWidgets|false|true|true|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            "ℹ️  Show item info for icons|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:showItemInfo|true|false|false|Desktop_IconView_showItemInfo|"
+            "ℹ️  Show item info below icons|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:labelOnBottom|true|false|false|Desktop_IconView_labelOnBottom|${GY}(choosing Deactivate will show item info on the right, shifting icons to the left)${NC}"
+            "🔤 Sort and arrange icons by name|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:arrangeBy|name|none|none|Desktop_IconView_arrangeBy|${GY}If currently set to 'none', your arrangement will remain intact when choosing 'name', in case you wish to revert back. (Only removing .DS_Store files will forget your current arrangement)${NC}"
+            "📏 Set icon text size to 14|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:textSize|14.000000|16.000000|12.000000|Desktop_IconView_textSize|${GY}(choosing Deactivate will set the text size to 16)${NC}"
+            "📏 Set icon size to 72|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:iconSize|72.000000|84.000000|64.000000|Desktop_IconView_iconSize|${GY}(choosing Deactivate will set grid size to 84x84)${NC}"
+            "📐 Set icon grid spacing to 100|$HOME/Library/Preferences/com.apple.finder.plist|:DesktopViewSettings:IconViewSettings:gridSpacing|100.000000|85.000000|54.000000|Desktop_IconView_gridSpacing|${GY}(choosing Deactivate will set grid spacing to 85)${NC}"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🗜️  [Archive Utility]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🗑️  Move archives to trash after expanding|com.apple.archiveutility|dearchive-move-after|~/.Trash|.|.|writeResetValue|"
-        "🗑️  Move files to trash after archiving|com.apple.archiveutility|archive-move-after|~/.Trash|.|.|writeResetValue|"
-        "🚫 Don't reveal archives after expanding|com.apple.archiveutility|dearchive-reveal-after|false|true|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|⚙️  [System & UI]|"
+            "📜 Always show scroll bars|NSGlobalDomain|AppleShowScrollBars|Always|Automatic|Automatic|writeResetValue|${GY}(instead of auto-hiding)${NC}"
+            "📜 Click in the scroll bar to 'jump to the spot that's clicked'|NSGlobalDomain|AppleScrollerPagingBehavior|true|false|false|writeResetValue|${GY}Makes scrollbars jump to clicked position${NC}"
+            "🗂️  Always prefer tabs when opening documents|NSGlobalDomain|AppleWindowTabbingMode|always|manual|manual|writeResetValue|"
+            "⚠️  Always ask to keep changes when closing documents|NSGlobalDomain|NSCloseAlwaysConfirmsChanges|true|false|false|writeResetValue|"
+            "🪟 Close windows when quitting an app|NSGlobalDomain|NSQuitAlwaysKeepsWindows|false|true|false|writeResetValue|${GY}When enabled, open documents and windows will be not restored when you re-open an application.${NC}"
+            "🖱️  Double-clicking title bar zooms window|NSGlobalDomain|AppleActionOnDoubleClick|Maximize|Fill|Fill|writeResetValue|${GY}Sets 'window title bar double-clicking action' to Zoom instead of Fill${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            # Journal added
+            preference_commands+=(
+                "🧹 Clean Up Share Menu Extensions|com.apple.Sharing|SharingPeopleSuggestionsDisabled|true|false|false|DisableCertainShareExtensions|${GY}Activating this will disable the following items from the 'Share... context menu:${NC} ${YE}Add to Reading List, Notes, Add to Photos, Reminders, Save to Books, Contact Suggestions, Shortcuts, Freeform & Journal.${NC}"
+            )
+        elif [[ "$MACOS_MAJOR" -ge 13 ]]; then
+            # Freeform and Contact Suggestions added + Shortcuts now appears in Share Menu
+            preference_commands+=(
+                "🧹 Clean Up Share Menu Extensions|com.apple.Sharing|SharingPeopleSuggestionsDisabled|true|false|false|DisableCertainShareExtensions|${GY}Activating this will disable the following items from the 'Share...' context menu:${NC} ${YE}Add to Reading List, Notes, Add to Photos, Reminders, Save to Books, Contact Suggestions, Shortcuts & Freeform.${NC}"
+            )
+        elif [[ "$MACOS_MAJOR" -ge 12 ]]; then
+            # Shortcuts app exists, not in Share menu until 13
+            preference_commands+=(
+                "🧹 Clean Up Share Menu Extensions|pluginkit|Various-extensions|ignore|use|use|DisableCertainShareExtensions|${GY}Activating this will disable the following items from the 'Share' context menu:${NC} ${YE}Add to Reading List, Notes, Add to Photos, Reminders & Save to Books.${NC}"
+            )
+        else
+            preference_commands+=(
+                "🧹 Clean Up Share Menu Extensions|pluginkit|Various-extensions|ignore|use|use|DisableCertainShareExtensions|${GY}Activating this will disable the following items from the 'Share' context menu:${NC} ${YE}Add to Reading List, Notes, Add to Photos, Reminders & Save to Books.${NC}"
+            )
+        fi
+        preference_commands+=(
+            "📂 Expand Save Panels by default (1 of 2)|NSGlobalDomain|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
+            "📂 Expand Save Panels by default (2 of 2)|NSGlobalDomain|NSNavPanelExpandedStateForSaveMode2|true|false|false|writeResetValue|"
+            "📂 Set List View for Open Panels by default (1 of 3)|NSGlobalDomain|NSNavPanelFileLastListModeForOpenModeKey|2|1|1|writeResetValue|"
+            "📂 Set List View for Open Panels by default (2 of 3)|NSGlobalDomain|NSNavPanelFileListModeForOpenMode2|2|1|1|writeResetValue|"
+            "📂 Set List View for Open Panels by default (3 of 3)|NSGlobalDomain|NavPanelFileListModeForOpenMode|2|1|1|writeResetValue|"
+            "📂 Set List View for Save Panels by default (1 of 3)|NSGlobalDomain|NSNavPanelFileLastListModeForSaveModeKey|2|3|3|writeResetValue|"
+            "📂 Set List View for Save Panels by default (2 of 3)|NSGlobalDomain|NSNavPanelFileListModeForSaveMode2|2|3|3|writeResetValue|"
+            "📂 Set List View for Save Panels by default (3 of 3)|NSGlobalDomain|NavPanelFileListModeForSaveMode|2|3|3|writeResetValue|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 11 ]] || [[ "$MACOS_MAJOR" -eq 10 && "$MACOS_MINOR" -ge 15 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out — Catalina & above
+                preference_commands+=(
+                    "🚫 ${GY}Disable Dashboard (macOS Mojave & below)${NC}|com.apple.dashboard|mcx-disabled|true|false|false|writeResetValue|${GY}Disables Dashboard and widgets.${NC}"
+                )
+            fi
+        else
+            # supported — Mojave (10.14) & below
+            preference_commands+=(
+                "🚫 Disable Dashboard ${YE}(macOS Mojave & below)${NC}|com.apple.dashboard|mcx-disabled|true|false|false|writeResetValue|${GY}Disables Dashboard and widgets.${NC}"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 11 ]] || [[ "$MACOS_MAJOR" -eq 10 && "$MACOS_MINOR" -ge 11 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out — El Capitan (10.11)+ blocked this via SIP
+                preference_commands+=(
+                    "🚫 ${GY}Disable Notification Center (OSX Yosemite & below)${NC}|launchctl|/System/Library/LaunchAgents/com.apple.notificationcenterui|unload|load||launchctl|${GY}Disables Notification Center on older macOS's${NC}"
+                )
+            fi
+        else
+            # supported — Mountain Lion (10.8) through Yosemite (10.10)
+            preference_commands+=(
+                "🚫 Disable Notification Center ${YE}(OSX Yosemite & below)${NC}|launchctl|/System/Library/LaunchAgents/com.apple.notificationcenterui|unload|load||launchctl|${GY}Disables Notification Center on older macOS's${NC}"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🪟 [Window Tiling]|${MA}(Sequoia 15+)${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "🚫 Disable 'Drag windows to screen edges to tile' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTilingByEdgeDrag|false|true|true|writeResetValue|"
+                "🚫 Disable 'Drag windows to menu bar to fill screen' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTopTilingByEdgeDrag|false|true|true|writeResetValue|"
+                "🪟 Enable 'Hold ⌥ key while dragging windows to tile' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTilingOptionAccelerator|true|false|true|writeResetValue|"
+                "🚫 Disable 'Tiled windows have margins' ${MA}(Sequoia 15+)${NC}|com.apple.WindowManager|EnableTiledWindowMargins|false|true|true|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Disable 'Drag windows to screen edges to tile' (Sequoia 15+)${NC}|com.apple.WindowManager|EnableTilingByEdgeDrag|false|true|true|writeResetValue|"
+                "🚫 ${GY}Disable 'Drag windows to menu bar to fill screen' (Sequoia 15+)${NC}|com.apple.WindowManager|EnableTopTilingByEdgeDrag|false|true|true|writeResetValue|"
+                "🪟 ${GY}Enable 'Hold ⌥ key while dragging windows to tile' (Sequoia 15+)${NC}|com.apple.WindowManager|EnableTilingOptionAccelerator|true|false|true|writeResetValue|"
+                "🚫 ${GY}Disable 'Tiled windows have margins' (Sequoia 15+)${NC}|com.apple.WindowManager|EnableTiledWindowMargins|false|true|true|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🕹️  [Mission Control & Spaces]|"
+            "🪟 Automatically rearrange Spaces based on most recent use|com.apple.dock|mru-spaces|true|false|true|writeResetValue|"
+            "🪟 When switching to an app, switch to a Space with open windows for the app|NSGlobalDomain|AppleSpacesSwitchOnActivate|true|false|true|writeResetValue|"
+            "🪟 Group windows by application|com.apple.dock|expose-group-apps|true|false|false|writeResetValue|"
+            "🪟 Displays have separate Spaces ${BO}(Requires logging out)${BO}|com.apple.spaces|spans-displays|false|true|false|writeResetValue|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "🪟 Drag windows to top of screen to enter Mission Control ${MA}(Sequoia 15.1+)${NC}|com.apple.dock|enterMissionControlByTopWindowDrag|true|false|true|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🪟 ${GY}Drag windows to top of screen to enter Mission Control (Sequoia 15.1+)${NC}|com.apple.dock|enterMissionControlByTopWindowDrag|true|false|true|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|✨ [Appearance]|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🌑 Enable dark mode on icons ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleIconAppearanceTheme|RegularDark|||darkmode|"
+                "🪟 Enable tinted Liquid Glass ${BL}(Tahoe 26.1+)${NC}|NSGlobalDomain|NSGlassDiffusionSetting|true|false|false|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🌑 ${GY}Enable dark mode on icons (Tahoe 26+)${NC}|NSGlobalDomain|AppleIconAppearanceTheme|RegularDark|||darkmode|"
+                "🪟 ${GY}Enable tinted Liquid Glass (Tahoe 26.1+)${NC}|NSGlobalDomain|NSGlassDiffusionSetting|true|false|false|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            "📏 Set sidebar icon size to small (in Finder/Settings)|NSGlobalDomain|NSTableViewDefaultSizeMode|1|2|2|writeResetValue|${GY}Sets sidebar icon size to small instead of medium in Finder/Settings${NC}"
+            "🪟 Enable 'Reduce Transparency'|com.apple.universalaccess|reduceTransparency|true|false|false|ReduceTransparency|${GY}Reduces transparency on macoOS UI items${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🚫 Disable 'Tint Folders Based On Tags' ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|AppleDisableTagBasedIconTinting|true|||delete|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Disable 'Tint Folders Based On Tags' (Tahoe 26+)${NC}|NSGlobalDomain|AppleDisableTagBasedIconTinting|true|||delete|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🪄 [Animations]|"
+            "🚫 Disable Automatic Window Animations|NSGlobalDomain|NSAutomaticWindowAnimationsEnabled|false|true|||${GY}Disables automatic window animations system-wide${NC}"
+            "🚫 Disable Finder Info Window Animations|com.apple.finder|DisableAllAnimations|true|false|||${GY}Disables all Finder info window animations${NC}"
+            "🚫 Disable QuickLook Animations|NSGlobalDomain|QLPanelAnimationDuration|0.0|0.25|||${GY}Disables QuickLook panel animations${NC}"
+            "🚀 Speed Up Mission Control Animations|com.apple.dock|expose-animation-duration|0.1|0.5|||"
+            "🚀 Speed Up Finder's Drag and Drop Spring Delay|NSGlobalDomain|com.apple.springing.delay|0.2|0.5|||${GY}Reduces spring delay for Finder drag and drop${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 14 ]]; then
+            preference_commands+=(
+                "🚫 Reduce Motion ${GY}${GR}(Sonoma 14+)${NC}|com.apple.universalaccess|reduceMotion|true|false|false|ReduceMotion|${GY}Reduces certain animations (i.e. the 'bubbly' spotlight search in Tahoe - but also affects mission control)${NC}"
+                "🚫 Disable 'Auto-play animated images/GIFs' ${GY}${GR}(Sonoma 14+)${NC}|com.apple.Accessibility|ReduceMotionAutoplayAnimatedImagesEnabled|true|false|false|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Reduce Motion (Sonoma 14+)${NC}|com.apple.universalaccess|reduceMotion|true|false|false|ReduceMotion|${GY}Reduces certain animations (i.e. the 'bubbly' spotlight search in Tahoe - but also affects mission control)${NC}"
+                "🚫 ${GY}Disable 'Auto-play animated images/GIFs' (Sonoma 14+)${NC}|com.apple.Accessibility|ReduceMotionAutoplayAnimatedImagesEnabled|true|false|false|writeResetValue|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🚫 ${GY}Disable Launchpad animation when opening/showing (Sequoia 15 & below)${NC}|com.apple.dock|springboard-show-duration|0|0.4|0.4|writeResetValue|"
+                    "🚫 ${GY}Disable Launchpad animation when closing/hiding (Sequoia 15 & below)${NC}|com.apple.dock|springboard-hide-duration|0|0.4|0.4|writeResetValue|"
+                    "🚫 ${GY}Disable Launchpad animation when swiping between pages (Sequoia 15 & below)${NC}|com.apple.dock|springboard-page-duration|0|0.4|0.4|writeResetValue|"
+                )
+            fi
+        else
+            preference_commands+=(
+                "🚫 Disable Launchpad animation when opening/showing ${MA}(Sequoia 15 & below)${NC}|com.apple.dock|springboard-show-duration|0|0.4|0.4|writeResetValue|"
+                "🚫 Disable Launchpad animation when closing/hiding ${MA}(Sequoia 15 & below)${NC}|com.apple.dock|springboard-hide-duration|0|0.4|0.4|writeResetValue|"
+                "🚫 Disable Launchpad animation when swiping between pages ${MA}(Sequoia 15 & below)${NC}|com.apple.dock|springboard-page-duration|0|0.4|0.4|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📋 [Finder List View Options]|${GY}(Applies to all Finder, iCloud, and Trash list views)${NC}"
+            "🗑️  Remove all .DS_Store files ${BO}(Resets all Finder views)${NC}||'find <directory> -name ".DS_Store" -type f -delete'|home folder|documents folder|root folder|Remove_All_DS_Store_Files|${GY}This may be necessary if Finder views do not change after setting some preferences. '.DS_Store' files take precedence over global .plists, so deleting them will ensure new global preferences are used. .DS_Store files will regenerate upon opening a Finder window, so ensure that all Finder windows are closed before removing .DS_Store files, as well as setting new preferences. (Try choosing Deactivate to test this for the Documents folder only)${NC}"
+            "📋 Use List View by default|com.apple.finder|FXPreferredViewStyle|Nlsv|clmv|incv|writeResetValue|${GY}Sets Finder's default view to List View instead of Icon View. (choosing Deactivate will set this to column view)${NC}"
+            "🧮 Enable Calculate All Sizes|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:ListViewSettings:calculateAllSizes|true|false|false|ListView_calculateAllSizes|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|📸 [Screen Capture]|"
-        "🚫 Disable Screenshot border and shadow|com.apple.screencapture|disable-shadow|true|false|false|writeResetValue|${GY}Removes default border and shadow from screenshots${NC}"
-        "🖼️  Set default Screenshot Format from PNG to JPG|com.apple.screencapture|type|jpg|png|png|writeResetValue|${GY}Note that although file size will be smaller, you will lose transparent backgrounds if choosing jpg${NC}"
-        "🚫 Disable Screenshot Preview Thumbnails|com.apple.screencapture|show-thumbnail|false|true|true|writeResetValue|${GY}Disables screenshot preview thumbnails in order to save and appear on the desktop immediately${NC}"
-        "🚫 Disable date and time in filenames|com.apple.screencapture|include-date|false|true|true|writeResetValue|"
-        "🚫 Don't Show Mouse Pointer in Screenshots|com.apple.screencapture|showsCursor|false|true|false|writeResetValue|${GY}(Inactive by default)${NC}"
-        "🎥 Show Mouse Clicks When Screen Recording|com.apple.screencapture|showsClicks|true|false|true|writeResetValue|${GY}(Inactive by default)${NC}"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            # "GROUP|📋 [Finder List View Options]|"
+            # "Set Custom List View Columns (All Finder Views)|$HOME/Library/Preferences/com.apple.finder.plist|:ListViewColumns|active|inactive|delete|ListViewColumns|Sets custom column configuration for all Finder list views (iCloud, Standard, Save Panels)"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🎥 [QuickTime Player]|"
-        "🗂️  Always Show Tab Bar in QuickTime|com.apple.QuickTimePlayerX|NSWindowTabbingShoudShowTabBarKey-NSWindow-MGDocumentWindowController-MGDocumentWindowController-VT-FS|true|false|false|writeResetValue|"
-        "▶️  Auto-play videos when opened with QuickTime Player|com.apple.QuickTimePlayerX|MGPlayMovieOnOpen|true|false|false|writeResetValue|"
-        "✨ Set Audio/Movie Recording Quality to 'Maximum' in QuickTime|com.apple.QuickTimePlayerX|MGRecordingCompressionPresetIdentifier|MGCompressionPresetMaximumQuality|MGCompressionPresetHighQuality|MGCompressionPresetHighQuality|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📁 [Finder Icon View Options]|${GY}(Applies to all Finder, Save Dialogs, and iCloud icon views)${NC}"
+            "🗑️  Remove all .DS_Store files ${BO}(Resets all Finder views)${NC}||'find <directory> -name ".DS_Store" -type f -delete'|home folder|documents folder|root folder|Remove_All_DS_Store_Files|${GY}This may be necessary if Finder views do not change after setting some preferences. '.DS_Store' files take precedence over global .plists, so deleting them will ensure new global preferences are used. .DS_Store files will regenerate upon opening a Finder window, so ensure that all Finder windows are closed before removing .DS_Store files, as well as setting new preferences. (Try choosing Deactivate to test this for the Documents folder only)${NC}"
+            "📁 Use Icon View by default|com.apple.finder|FXPreferredViewStyle|icnv|Nlsv|incv|writeResetValue|${GY}Sets Finder's default view to Icon View. (choosing Deactivate will set this to list view)${NC}"
+            "ℹ️  Show item info near icons|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:showItemInfo|true|false|false|IconView_variousSettings|"
+            "⤵️  Show item info below icons|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:labelOnBottom|true|false|true|IconView_variousSettings|${GY}(choosing Deactivate will show item info on the right, shifting icons to the left)${NC}"
+            "🔤 Sort and arrange icons by name|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:arrangeBy|name|none|none|IconView_variousSettings|${GY}If currently set to 'none', your arrangement will remain intact when choosing 'name', in case you wish to revert back. (Only removing .DS_Store files will forget your current arrangement)${NC}"
+            "📏 Set icon text size to 12|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:textSize|12.000000|14.000000|12.000000|IconView_variousSettings|${GY}(choosing Deactivate will set the text size to 14)${NC}"
+            "📏 Set icon size to 48|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:iconSize|48.000000|72.000000|64.000000|IconView_variousSettings|${GY}(choosing Deactivate will set the icon size to 72x72)${NC}"
+            "📐 Set icon grid spacing to 29|$HOME/Library/Preferences/com.apple.finder.plist|:StandardViewSettings:IconViewSettings:gridSpacing|29.000000|43.000000|54.000000|IconView_variousSettings|${GY}(choosing Deactivate will set the grid spacing to 43)${NC}"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🌐 [Safari - General]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🗂️  Always Show Tab Bar in Safari|com.apple.Safari|AlwaysShowTabBar|1|0|0|writeResetValue|"
-        "🌐 Show Overlay Status Bar|com.apple.Safari|ShowOverlayStatusBar|true|false|false|writeResetValue|"
-        "⭐️ Show Favorites Bar|com.apple.Safari|ShowFavoritesBar-v2|true|false|false|writeResetValue|"
-        "🎞️  Safari opens with all windows from last session|com.apple.Safari|AlwaysRestoreSessionAtLaunch|true|false|false|writeResetValue|"
-        "🌐 New windows open with Empty Page|com.apple.Safari|NewWindowBehavior|1|4|4|writeResetValue|"
-        "🌐 New tabs open with Empty Page|com.apple.Safari|NewTabBehavior|1|4|4|writeResetValue|"
-        "🚫 Disable Auto-Opening of 'Safe' Downloads|com.apple.Safari|AutoOpenSafeDownloads|false|true|false|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📁 [Finder]|"
+            "🗂️  Always Show Tab Bar in Finder|com.apple.finder|NSWindowTabbingShoudShowTabBarKey-com.apple.finder.TBrowserWindow|true|false|false|writeResetValue|${GY}Shows the tab bar at the top of Finder windows by default${NC}"
+            "🗂️  Open folders in tabs instead of new windows|com.apple.finder|FinderSpawnTab|true|false|false|writeResetValue|"
+            "🏠 New Finder windows show the Desktop folder|com.apple.finder|NewWindowTarget|PfDe|PfHm|PfAF|writeResetValue|${GY}Sets new Finder windows to open the Desktop folder instead of Recents. (choosing Deactivate here will set it to the home folder)${NC}"
+            # "🏠 Set Desktop folder path for new Finder windows|com.apple.finder|NewWindowTargetPath|file://${HOME}/Desktop/|file://${HOME}/|||Sets new Finder windows to open the Desktop folder"
+            "🚫 Don't show Recent Tags in the Sidebar|com.apple.finder|ShowRecentTags|false|true|true|writeResetValue|"
+            # "🚫 Don't show 'Recents' in the sidebar|com.apple.finder|PreferencesWindow.LastSelection|SDBR|SDBR|TAGS|writeResetValue|"
+            "🛣️  Show Path Bar in Finder|com.apple.finder|ShowPathbar|true|false|false|writeResetValue|${GY}Shows the path bar at the bottom of Finder windows${NC}"
+            "📊 Show Status Bar in Finder|com.apple.finder|ShowStatusBar|true|false|false|writeResetValue|${GY}Shows the status bar at the bottom of Finder windows${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # Tahoe 26+
+                preference_commands+=(
+                    "📏 Shrink sidebar width to the minimum ${BL}(Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                    # "📏 Shrink sidebar width to the minimum (2 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|Shrinks sidebar width (in other views) to the minimum"
+                    "📏 ${GY}Shrink sidebar width to the minimum (Sequoia 15 & below)${NC}|com.apple.finder|SidebarWidth|143|164|164|ShrinkSideBarInSequoiaAndBelow|"
+                    # "📏 ${GY}Shrink sidebar width to the minimum (2 of 2) (Sequoia 15 & below)${NC}|com.apple.finder|FK_SidebarWidth|143|164|164|writeResetValue|Shrinks sidebar width (in other views) to the minimum"
+                )
+            else
+                preference_commands+=(
+                    "📏 Shrink sidebar width to the minimum ${BL}(Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                    # "📏 Shrink sidebar width to the minimum (2 of 2) ${BL}(Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|Shrinks sidebar width (in other views) to the minimum"
+                )
+            fi
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # Sequoia 15 & below
+                preference_commands+=(
+                    "📏 ${GY}Shrink sidebar width to the minimum (Tahoe 26+)${NC}|com.apple.finder|SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|"
+                    # "📏 ${GY}Shrink sidebar width to the minimum (2 of 2) (Tahoe 26+)${NC}|com.apple.finder|FK_SidebarWidth2|135|161|161|ShrinkSideBarInTahoe|Shrinks sidebar width (in other views) to the minimum"
+                    "📏 Shrink sidebar width to the minimum ${MA}(Sequoia 15 & below)${NC}|com.apple.finder|SidebarWidth|143|164|164|ShrinkSideBarInSequoiaAndBelow|"
+                    # "📏 Shrink sidebar width to the minimum (2 of 2) ${MA}(Sequoia 15 & below)${NC}|com.apple.finder|FK_SidebarWidth|143|164|164|writeResetValue|Shrinks sidebar width (in other views) to the minimum"
+                )
+            else
+                preference_commands+=(
+                    "📏 Shrink sidebar width to the minimum ${MA}(Sequoia 15 & below)${NC}|com.apple.finder|SidebarWidth|143|164|164|ShrinkSideBarInSequoiaAndBelow|"
+                    # "📏 Shrink sidebar width to the minimum (2 of 2) ${MA}(Sequoia 15 & below)${NC}|com.apple.finder|FK_SidebarWidth|143|164|164|writeResetValue|Shrinks sidebar width (in other views) to the minimum"
+                )
+            fi
+        fi
+        preference_commands+=(
+            "🏷️  Show all filename extensions|NSGlobalDomain|AppleShowAllExtensions|true|false|false|writeResetValue|${GY}Shows file extensions for all files${NC}"
+            "🚫 Disable the warning when changing a file extension|com.apple.finder|FXEnableExtensionChangeWarning|false|true|true|writeResetValue|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # Sequoia 15+
+                preference_commands+=(
+                    "🚫 Hide Warning before removing from iCloud Drive ${MA}(Sequoia 15+)${NC}|com.apple.bird|com.apple.clouddocs.unshared.moveOut.suppress|1|0|0|writeResetValue|"
+                    "🚫 ${GY}Hide Warning before removing from iCloud Drive (Sonoma 14 & below)${NC}|com.apple.finder|FXEnableRemoveFromICloudDriveWarning|0|1|1|writeResetValue|"
+                )
+            else
+                preference_commands+=(
+                    "🚫 Hide Warning before removing from iCloud Drive ${MA}(Sequoia 15+)${NC}|com.apple.bird|com.apple.clouddocs.unshared.moveOut.suppress|1|0|0|writeResetValue|"
+                )
+            fi
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # Sonoma 14 & below
+                preference_commands+=(
+                    "🚫 ${GY}Hide Warning before removing from iCloud Drive (Sequoia 15+)${NC}|com.apple.bird|com.apple.clouddocs.unshared.moveOut.suppress|1|0|0|writeResetValue|"
+                    "🚫 Hide Warning before removing from iCloud Drive ${GY}${GR}(Sonoma 14 & below)${NC}|com.apple.finder|FXEnableRemoveFromICloudDriveWarning|0|1|1|writeResetValue|"
+                )
+            else
+                preference_commands+=(
+                    "🚫 Hide Warning before removing from iCloud Drive ${GY}${GR}(Sonoma 14 & below)${NC}|com.apple.finder|FXEnableRemoveFromICloudDriveWarning|0|1|1|writeResetValue|"
+                )
+            fi
+        fi
+        preference_commands+=(
+            "🔍 Search the current folder when performing a search|com.apple.finder|FXDefaultSearchScope|SCcf|SCev|SCev|writeResetValue|${GY}Uses the current (focused) folder when performing a search${NC}"
+            "📚 Show hidden User ~/Library folder by default|com.apple.FinderInfo|ShowLibrary|visible|hidden||chflags|${GY}Makes the User Library folder visible in Finder${NC}"
+            "👻 Show hidden files (or toggle them with ⇧⌘.)|com.apple.finder|AppleShowAllFiles|true|false|false|writeResetValue|${GY}(You can also show them temporarily with ⇧⌘.)${NC}"
+            # "🔍 Set Custom Get Info Pane Layout|com.apple.finder|FXInfoPanesExpanded|'{General=true;Comments=false;MetaData=true;Name=true;OpenWith=true;Preview=false;Privileges=true;}'|{}||defaults_dict|Sets Get Info pane expand/collapse"
+            # "🔍 Set Custom Toolbar Items|com.apple.finder|NSToolbar Configuration Browser|'{\"TB Default Item Identifiers\"=(\"com.apple.finder.BACK\",\"com.apple.finder.SWCH\",NSToolbarSpaceItem,\"com.apple.finder.ARNG\",\"com.apple.finder.SHAR\",\"com.apple.finder.LABL\",\"com.apple.finder.ACTN\",NSToolbarSpaceItem,\"com.apple.finder.SRCH\");\"TB Display Mode\"=2;\"TB Icon Size Mode\"=1;\"TB Is Shown\"=1;\"TB Item Identifiers\"=(\"com.apple.finder.BACK\",\"com.apple.finder.loc \",\"com.apple.finder.AirD\",\"com.apple.finder.CNCT\",\"com.apple.finder.NFLD\",\"com.apple.finder.SHAR\",\"com.apple.finder.SWCH\",NSToolbarSpaceItem,\"com.apple.finder.ACTN\",NSToolbarSpaceItem,\"com.apple.finder.SRCH\");\"TB Size Mode\"=1;}'|{}||defaults_dict|Sets Finder toolbar"    
+            
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|♿️ [Accessibility - Zoom]|⚠️  ${YE}(Terminal requires Full Disk Access to write changes)${NC}"
+            "🔎 Use keyboard shortcuts to zoom|com.apple.universalaccess|closeViewHotkeysEnabled|true|false|false|UniversalAccessNeedsFDA|${GY}Enables global zoom functionality via hot keys${NC}"
+            "🔎 Use trackpad gesture to zoom|com.apple.universalaccess|closeViewTrackpadGestureZoomEnabled|true|false|false|UniversalAccessNeedsFDA|"
+            "🔎 Zoom Continuously with Pointer|com.apple.universalaccess|closeViewPanningMode|false|true|false|UniversalAccessNeedsFDA|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 14 ]]; then
+            preference_commands+=(
+                "🔎 Zoom Each Display Independently ${GY}${GR}(Sonoma 14+)${NC}|com.apple.universalaccess|closeViewZoomIndividualDisplays|true|false|false|UniversalAccessNeedsFDA|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🔎 ${GY}Zoom Each Display Independently (Sonoma 14+)${NC}|com.apple.universalaccess|closeViewZoomIndividualDisplays|true|false|false|UniversalAccessNeedsFDA|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "🔎 Show Zoomed Image While Screen Sharing ${MA}(Sequoia 15+)${NC}|com.apple.universalaccess|closeViewZoomScreenShareEnabledKey|true|false|false|UniversalAccessNeedsFDA|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🔎 ${GY}Show Zoomed Image While Screen Sharing (Sequoia 15+)${NC}|com.apple.universalaccess|closeViewZoomScreenShareEnabledKey|true|false|false|UniversalAccessNeedsFDA|"
+            )
+        fi
+        preference_commands+=(
+            "🔎 Follow keyboard focus 'Always'|com.apple.universalaccess|closeViewZoomFocusFollowModeKey|1|2|2|UniversalAccessNeedsFDA|${GY}Zoom always follows keyboard focus when typing${NC}"
+            "🔎 Move screen image so focus item is centered|com.apple.universalaccess|closeViewZoomFocusMovement|false|true|true|UniversalAccessNeedsFDA|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🌐 [Safari - Tabs]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🗂️  Close Tabs Manually|com.apple.Safari|CloseTabsAutomatically|false|true|false|writeResetValue|${GY}(On by default)${NC}"
-        "🗂️  Show Color in Tab Bar ${BL}(Tahoe 26+)${NC}|com.apple.Safari|NeverUseBackgroundColorInToolbar|false|true|false|writeResetValue|${GY}(On by default)${NC}"
-        "🌐 Always show website titles in tabs|com.apple.Safari|EnableNarrowTabs|false|true|true|writeResetValue|"
-        "🗂️  Command + Click opens a link in a new tab|com.apple.Safari|CommandClickMakesTabs|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        "🚫 Don't make new tabs or windows active on command + click|com.apple.Safari|OpenNewTabsInFront|false|true|false|writeResetValue|"
-        "🚫 Disable compact tab layout ${MA}(Sequoia 15 and below)${NC} or ${BL}(Tahoe 26.4+)${NC}|com.apple.Safari|ShowStandaloneTabBar|true|false|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📋 [Menu Bar]|${GY}(To prevent clutter, hide all and just use Control Center) 👍${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "📋 Show Menu Bar Background ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
+                    "🖥️  Never Hide Menu Bar In Fullscreen ${BL}(Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
+                    "🖥️  ${GY}Never Hide Menu Bar In Fullscreen (Sequoia 15 & below)${NC}|NSGlobalDomain|AppleMenuBarVisibleInFullscreen|true|false|false|writeResetValue|"
+                )
+            else
+                preference_commands+=(
+                    "📋 Show Menu Bar Background ${BL}(Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
+                    "🖥️  Never Hide Menu Bar In Fullscreen ${BL}(Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
+                )
+            fi
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                preference_commands+=(
+                    "📋 ${GY}Show Menu Bar Background (Tahoe 26+)${NC}|NSGlobalDomain|SLSMenuBarUseBlurredAppearance|true|||delete|${GY}Shows or disables the menu bar's blurred appearance${NC}"
+                    "🖥️  ${GY}Never Hide Menu Bar In Fullscreen (Tahoe 26+)${NC}|com.apple.controlcenter|AutoHideMenuBarOption|3|2||NevaHideMenuBarinTahoe|"
+                    "🖥️  Never Hide Menu Bar In Fullscreen ${MA}(Sequoia 15 & below)${NC}|NSGlobalDomain|AppleMenuBarVisibleInFullscreen|true|false|false|writeResetValue|"
+                )
+            else
+                preference_commands+=(
+                    "🖥️  Never Hide Menu Bar In Fullscreen ${MA}(Sequoia 15 & below)${NC}|NSGlobalDomain|AppleMenuBarVisibleInFullscreen|true|false|false|writeResetValue|"
+                )
+            fi
+        fi
+        preference_commands+=(
+            # "🍱 Show Control Center in Menu Bar|com.apple.controlcenter|NSStatusItem Visible BentoBox|true|false|true|delete|Shows Control Center in the menu bar"
+            # "🕒 Always show date in menu bar|com.apple.menuextra.clock|ShowDate|true|false|true|writeResetValue|"
+            "🕒 Display the time with seconds|com.apple.menuextra.clock|ShowSeconds|true|false|false|writeResetValue|"
+            "🔍 Show Spotlight in Menu Bar|com.apple.Spotlight|MenuItemHidden|0|1|0|-currentHost|"
+            # "🔮 Show Siri in Menu Bar|com.apple.controlcenter|Siri|2|8|2|-currentHost|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "🔑 Show Passwords In Menu Bar ${MA}(Sequoia 15+)${NC}|com.apple.Passwords|EnableMenuBarExtra|true|false|false|PasswordManager|${GY}Please enable manually the first time in order to start the Passwords background item/service)${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🔑 ${GY}Show Passwords In Menu Bar (Sequoia 15+)${NC}|com.apple.Passwords|EnableMenuBarExtra|true|false|false|PasswordManager|${GY}Please enable manually the first time in order to start the Passwords background item/service)${NC}"
+            )
+        fi
+        preference_commands+=(
+            "🛜 Show WiFi in Menu Bar|com.apple.controlcenter|WiFi|2|8|8|-currentHost|"
+            "🔵 Show Bluetooth in Menu Bar [Always]|com.apple.controlcenter|Bluetooth|2|8|8|-currentHost|"
+            "🌀 Show AirDrop in Menu Bar [Always]|com.apple.controlcenter|AirDrop|2|8|8|-currentHost|"
+            "📵 Show Focus in Menu Bar [Always]|com.apple.controlcenter|FocusModes|18|8|2|-currentHost|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 && "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚀 ${GY}Show Stage Manager in Menu Bar [Always] (Sequoia 15 & below)${NC}|com.apple.controlcenter|StageManager|2|8|8|-currentHost|"
+            )
+        else
+            preference_commands+=(
+                "🚀 Show Stage Manager in Menu Bar [Always] ${MA}(Sequoia 15 & below)${NC}|com.apple.controlcenter|StageManager|2|8|8|-currentHost|"
+            )
+        fi
+        preference_commands+=(
+            "🖥️  Show Screen Mirroring in Menu Bar [Always]|com.apple.controlcenter|ScreenMirroring|18|8|2|-currentHost|"
+            "🖥️  Show Display in Menu Bar [Always]|com.apple.controlcenter|Display|18|8|2|-currentHost|"
+            "🔊 Show Sound in Menu Bar [Always]|com.apple.controlcenter|Sound|18|8|2|-currentHost|"
+            "🚀 Show Now Playing in Menu Bar [Always]|com.apple.controlcenter|NowPlaying|18|8|2|-currentHost|"
+            "♿️ Show Accessibility in Menu Bar|com.apple.controlcenter|AccessibilityShortcuts|3|9|9|-currentHost|"
+            "📣 Show Music Recognition in Menu Bar|com.apple.controlcenter|MusicRecognition|6|12|12|-currentHost|"
+            "🦻 Show Hearing in Menu Bar|com.apple.controlcenter|Hearing|2|8|8|-currentHost|"
+            "🎤 Show Voice Control in Menu Bar|com.apple.controlcenter|VoiceControl|18|8|8|-currentHost|"
+            "👤 Show Fast User Switching in Menu Bar|com.apple.controlcenter|UserSwitcher|2|8|8|-currentHost|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "⚡️ Show Low Power Mode in Menu Bar ${MA}(Sequoia 15+)${NC}|com.apple.controlcenter|EnergyModeModule|9|19|19|-currentHost|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "⚡️ ${GY}Show Low Power Mode in Menu Bar (Sequoia 15+)${NC}|com.apple.controlcenter|EnergyModeModule|9|19|19|-currentHost|"
+            )
+        fi
+        preference_commands+=(
+            "🔤 Show Text Input in Menu Bar|com.apple.TextInputMenu|visible|true|false|false|writeResetValue|"
+            "⏳ Show Time Machine in Menu Bar|com.apple.systemuiserver|NSStatusItem Visible com.apple.menuextra.TimeMachine|true|false|false|Show_Time_Machine_Menu_Bar_Item|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 && "$MACOS_MINOR" -ge 2 ]]; then
+            preference_commands+=(
+                "⏰ Show Timer in Menu Bar ${BL}(Tahoe 26.2+)${NC}|com.apple.controlcenter|Timer|16|0|0|-currentHost|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "⏰ ${GY}Show Timer in Menu Bar (Tahoe 26.2+)${NC}|com.apple.controlcenter|Timer|16|0|0|-currentHost|"
+            )
+        fi
+        preference_commands+=(
+            "⏳ Show VPN in Menu Bar|com.apple.systemuiserver|NSStatusItem Visible com.apple.menuextra.vpn|true|false|false|Show_VPN_Menu_Bar_Item|${GY}Must first be configured to appear. (System Settings > Network > VPN & Filters)${NC}"
+            # "🚀 Show Shortcuts in Menu Bar|com.apple.controlcenter|NSStatusItem Visible Shortcuts|true|false|||"
+            # "🎥 Show FaceTime in Menu Bar|com.apple.controlcenter|NSStatusItem Visible FaceTime|true|false|||"
+            # "⛅️ Show Weather in Menu Bar ${MA}(macOS Sequoia 15+)${NC}|com.apple.controlcenter|Weather|2|8|8|-currentHost|"
+            "🕹️  Show Remote Management in Menu Bar|/Library/Preferences/com.apple.RemoteManagement|LoadRemoteManagementMenuExtra|true|false|false|Remote_Management_Menu_Bar|${GY}Must first be enabled to appear. (System Settings > General > Sharing > Remote Management)${NC}"
+            
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📋 [Menu Bar - For Laptops]|"
+        )
+        if [[ "$DEVICE_TYPE" == "laptop" ]]; then
+            preference_commands+=(
+                "🔋 Show Battery in Menu Bar|com.apple.controlcenter|Battery|3|9|9|-currentHost|"
+                "💯 Show Battery Percentage in Menu Bar|com.apple.controlcenter|BatteryShowPercentage|1|0|0|-currentHost|"
+                "⌨️  Show Keyboard Brightness in Menu Bar|com.apple.controlcenter|KeyboardBrightness|3|9|9|-currentHost|"
+            )
+        elif [[ "$DEVICE_TYPE" == "desktop" ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                preference_commands+=(
+                    "🔋 ${GY}Show Battery in Menu Bar${NC}|com.apple.controlcenter|Battery|3|9|9|-currentHost|"
+                    "💯 ${GY}Show Battery Percentage in Menu Bar${NC}|com.apple.controlcenter|BatteryShowPercentage|1|0|0|-currentHost|"
+                    "⌨️  ${GY}Show Keyboard Brightness in Menu Bar${NC}|com.apple.controlcenter|KeyboardBrightness|3|9|9|-currentHost|"
+                )
+            fi
+        else
+            preference_commands+=(
+                "🔋 Show Battery in Menu Bar|com.apple.controlcenter|Battery|3|9|9|-currentHost|"
+                "💯 Show Battery Percentage in Menu Bar|com.apple.controlcenter|BatteryShowPercentage|1|0|0|-currentHost|"
+                "⌨️  Show Keyboard Brightness in Menu Bar|com.apple.controlcenter|KeyboardBrightness|3|9|9|-currentHost|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📶 [Connectivity]|"
+            "🚫 Disable Universal Control|com.apple.universalcontrol|Disable|1|delete|delete|-currentHost|"
+            "🚫 Disable AirPlay Receiver|com.apple.controlcenter|AirplayReceiverEnabled|false|true|true|-currentHost|"
+            "🚫 Prevent Photos from opening automatically when devices are plugged in|com.apple.ImageCapture|disableHotPlug|true|false|false|-currentHost|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 11 ]] || [[ "$MACOS_MAJOR" -eq 10 && "$MACOS_MINOR" -ge 15 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out — Catalina (10.15)+ removed legacy AirDrop
+                preference_commands+=(
+                    "🌐 ${GY}Enable AirDrop over Ethernet (Mojave 10.14 & below)${NC}|com.apple.NetworkBrowser|BrowseAllInterfaces|true|false|false|writeResetValue|"
+                )
+            fi
+        else
+            # supported — Lion (10.7) through Mojave (10.14)
+            preference_commands+=(
+                "🌐 Enable AirDrop over Ethernet ${YE}(Mojave 10.14 & below)${NC}|com.apple.NetworkBrowser|BrowseAllInterfaces|true|false|false|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🔍 [Spotlight]|"
+            # "🚫 Disable Indexing for Custom Items (When using FindAnyFile)|com.apple.spotlight|orderedItems|'{\"enabled\"=1;\"name\"=\"APPLICATIONS\";}' '\"{\"enabled\"=0;\"name\"=\"MENU_EXPRESSION\";}\" … (etc)’||defaults_array|Sets Spotlight orderedItems"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🚫 Disable 'Show Related Content' ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Custom.relatedContents|||DisableSpotlightRelatedContent|"
+                "🚫 Disable all default results (except System Settings & Apps) ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Remove various Apps/Items|||ReduceSpotlightResultsInTahoe|${GY}Note that more apps may show up here later on once using them. In that case, this preference may inadvertently affect new apps that show up here. (Intended for fresh installs)${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Disable 'Show Related Content' (Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Custom.relatedContents|||DisableSpotlightRelatedContent|"
+                "🚫 ${GY}Disable all default results (except System Settings & Apps) (Tahoe 26+)${NC}|com.apple.Spotlight|EnabledPreferenceRules|Remove various Apps/Items|||ReduceSpotlightResultsInTahoe|${GY}Note that more apps may show up here later on once using them. In that case, this preference may inadvertently affect new apps that show up here. (Intended for fresh installs)${NC}"
+            )
+        fi
+        # if [[ "$MACOS_MAJOR" -lt 26 ]]; then
+        #     preference_commands+=(
+        #         "🚫 Disable all default results (except System Settings & Apps) ${MA}(Sequoia 15 & below)${NC}|com.apple.Spotlight|orderedItems|Various Apps/Items|||ReduceSpotlightResultsInSequoia|"    # not reliably working yet
+        #     )
+        # elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+        #     # grey out unsupported
+        #     preference_commands+=(
+        #         "🚫 ${GY}Disable all default results (except System Settings & Apps) (Sequoia 15 & below)${NC}|com.apple.Spotlight|orderedItems|Various Apps/Items|||ReduceSpotlightResultsInSequoia|"    # not reliably working yet
+        #     )
+        # fi
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "🚫 Disable 'Help Apple Improve Search' ${MA}(Sequoia 15+)${NC}|com.apple.assistant.support|Search Queries Data Sharing Status|2|1|1|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Disable 'Help Apple Improve Search' (Sequoia 15+)${NC}|com.apple.assistant.support|Search Queries Data Sharing Status|2|1|1|writeResetValue|"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+            "🔍 Enable Clipboard Manager ${BL}(Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryEnabled|true|false|false|writeResetValue|"
+            "🔍 Increase Clipboard history from 8hrs to 7 days ${BL}(Tahoe 26.1+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|604800|28800|28800|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+            "🔍 ${GY}Enable Clipboard Manager (Tahoe 26+)${NC}|com.apple.Spotlight|PasteboardHistoryEnabled|true|false|false|writeResetValue|"
+            "🔍 ${GY}Increase Clipboard history from 8hrs to 7 days (Tahoe 26.1+)${NC}|com.apple.Spotlight|PasteboardHistoryTimeout|604800|28800|28800|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🔄 [Automatic Updates]|"
+            # "OLD=🚫 Disable macOS Auto-Update|softwareupdate|schedule|off|on||sudo|"
+            "🔄 Automatically Download macOS Updates|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticDownload|true|false||SoftwareUpdates|"
+            "🔄 Automatically Install macOS Updates|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticallyInstallMacOSUpdates|true|false||SoftwareUpdates|"
+            "🔄 Automatically Install Config Data|/Library/Preferences/com.apple.SoftwareUpdate|ConfigDataInstall|true|false||SoftwareUpdates|"
+            "🔄 Automatically Install Critical Updates|/Library/Preferences/com.apple.SoftwareUpdate|CriticalUpdateInstall|true|false||SoftwareUpdates|"
+        )
+        if [[ "$MACOS_MAJOR" -lt 11 && "$MACOS_MINOR" -lt 15 ]]; then
+            # works up until 10.14 Mojave. Stopped working in Catalina
+            preference_commands+=(
+                "🔄 Automatically Check for macOS Updates ${GY}${YE}(Mojave & below)${NC}|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticCheckEnabled|true|false||SoftwareUpdates|"
+            )
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🔄 ${GY}Automatically Check for macOS Updates (Mojave & below)${NC}|/Library/Preferences/com.apple.SoftwareUpdate|AutomaticCheckEnabled|true|false||SoftwareUpdates|"
+                )
+            fi
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🤖 [Apple Intelligence]|(${BO}Req. Apple Silicon or ${MA}Sequoia 15.1+${NC})"
+        )
+        if [[ "$ARCH_TYPE" != "arm64" ]] || [[ "$MACOS_MAJOR" -le 14 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                preference_commands+=(
+                    "🚫 ${GY}Disable Apple Intelligence${NC}|com.apple.CloudSubscriptionFeatures.optIn|Dynamic (check yours with 'defaults read com.apple.CloudSubscriptionFeatures.optIn')|false|true|false|disable_Apple_Intelligence|"
+                )
+            fi
+        else
+            preference_commands+=(
+                "🚫 Disable Apple Intelligence|com.apple.CloudSubscriptionFeatures.optIn|Dynamic (check yours with 'defaults read com.apple.CloudSubscriptionFeatures.optIn')|false|true|false|disable_Apple_Intelligence|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🔑 [Passwords & AutoFill]|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 15 ]]; then
+            preference_commands+=(
+                "🔑 Show Passwords In Menu Bar ${MA}(Sequoia 15+)${NC}|com.apple.Passwords|EnableMenuBarExtra|true|false|false|PasswordManager|${GY}Please enable manually the first time in order to start the Passwords background item/service)${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🔑 ${GY}Show Passwords In Menu Bar (Sequoia 15+)${NC}|com.apple.Passwords|EnableMenuBarExtra|true|false|false|PasswordManager|${GY}Please enable manually the first time in order to start the Passwords background item/service)${NC}"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🚫 Disallow Contacting Websites ${BL}(Tahoe 26+)${NC}|com.apple.Passwords|WBSPasswordsAppBackgroundNetworkingEnabled|false|true|true|writeResetValue|${GY}Prevents network telemetry with websites from saved passwords. (This is how icons and names get shown)${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚫 ${GY}Disallow Contacting Websites (Tahoe 26+)${NC}|com.apple.Passwords|WBSPasswordsAppBackgroundNetworkingEnabled|false|true|true|writeResetValue|${GY}Prevents network telemetry with websites from saved passwords. (This is how icons and names get shown)${NC}"
+            )
+        fi
+        if [[ "$MACOS_MAJOR" -ge 14 ]]; then
+            preference_commands+=(
+                "🚮 Delete verification codes after use ${BO}(FDA req. to read/write)${NC} ${GY}${GR}(Sonoma 14+)${NC}|com.apple.MobileSMS|DeleteVerificationCodes|true|false|false|Auto_Fill_Passwords_DeleteVerificationCodes|${GY}Auotmatically deletes verifications codes in Messages and Mail after they are used.${NC}"
+                # "🚮 Delete verification codes after use [2/2] ${MA}(Sequoia 15+)${NC}|com.apple.onetimepasscodes|DeleteVerificationCodes|true|false|false|Auto_Fill_Passwords_DeleteVerificationCodes|${GY}Auotmatically deletes verifications codes in Messages and Mail after they are used.${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🚮 ${GY}Delete verification codes after use (FDA req. to read/write) (Sonoma 14+)${NC}|com.apple.MobileSMS|DeleteVerificationCodes|true|false|false|Auto_Fill_Passwords_DeleteVerificationCodes|${GY}Auotmatically deletes verifications codes in Messages and Mail after they are used.${NC}"
+                # "🚮 Delete verification codes after use [2/2] ${MA}(Sequoia 15+)${NC}|com.apple.onetimepasscodes|DeleteVerificationCodes|true|false|false|Auto_Fill_Passwords_DeleteVerificationCodes|${GY}Auotmatically deletes verifications codes in Messages and Mail after they are used.${NC}"
+            )
+        fi
+        preference_commands+=(
+            "🚫 Disable AutoFill Passwords and Passkeys ${BO}(FDA req. to read/write)${NC}|com.apple.Safari|AutoFillPasswords|false|true|false|DisableGlobalPasswordAutoFill|"
+            "🚫 Disable AutoFill from iCloud Keychain/Passwords app ${BO}(FDA req. to read/write)${NC}|com.apple.Safari|AutoFillFromiCloudKeychain|false|true|false|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🌐 [Safari - AutoFill]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🚫 Disable AutoFill Contacts|com.apple.Safari|AutoFillFromAddressBook|false|true|true|writeResetValue|"
-        "🚫 Disable AutoFill User Names & Passwords|com.apple.Safari|AutoFillPasswords|false|true|true|writeResetValue|"        
-        "🚫 Disable AutoFill Credit Cards|com.apple.Safari|AutoFillCreditCardData|false|true|true|writeResetValue|"
-        "🚫 Disable AutoFill Other Forms|com.apple.Safari|AutoFillMiscellaneousForms|false|true|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📝 [TextEdit]|"
+            "🗂️  Always show Tab Bar in TextEdit|com.apple.TextEdit|NSWindowTabbingShoudShowTabBarKey-NSWindow-DocumentWindowController-DocumentWindowController-VT-FS|true|false|false|writeResetValue|"
+            "📝 Create a new document by default when opening TextEdit|com.apple.TextEdit|NSShowAppCentricOpenPanelInsteadOfUntitledFile|false|true|false|writeResetValue|${GY}Opens a blank document immediately instead of the open files panel.${NC}"
+            "📝 Use Plain Text Mode for TextEdit|com.apple.TextEdit|RichText|false|true|true|writeResetValue|${GY}Sets TextEdit to use Plain Text instead of Rich Text by default${NC}"
+            "📂 Set Default Font Size in TextEdit to 14|com.apple.TextEdit|NSFixedPitchFontSize|14|12|11|writeResetValue|${GY}(Choosing Deactivate sets the font size to 12)${NC}"
+            "📂 Expand Save Panel by Default (1 of 3)|com.apple.TextEdit|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
+            "📂 Expand Save Panel by Default (2 of 3)|com.apple.TextEdit|NSNavPanelExpandedStateForSaveMode2|true|false|false|writeResetValue|"
+            "📂 Expand Save Panel by Default (3 of 3)|com.apple.TextEdit|NSNavPanelFileLastListModeForSaveModeKey|2|1|1|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🌐 [Safari - Search]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🔎 Use DuckDuckGo as default search provider in ALL Browsing|com.apple.Safari|SearchProviderShortName|DuckDuckGo|Google|Google|writeResetValue|"
-        "🔎 Private Search Engine Uses Normal Search Engine|com.apple.Safari|PrivateSearchEngineUsesNormalSearchEngineToggle|true|false|true|writeResetValue|"
-        "🚫 Disable Search Engine Suggestions|com.apple.Safari|SuppressSearchSuggestions|true|false|false|writeResetValue|"
-        "🚫 Disable Safari Suggestions|com.apple.Safari|UniversalSearchEnabled|false|true|true|writeResetValue|"
-        "🚫 Disable Previously Visited Website Suggestions|com.apple.Safari|WebsiteSpecificSearchEnabled|false|true|true|writeResetValue|"
-        "🚫 Disable Preload Top Hit in the background|com.apple.Safari|PreloadTopHit|false|true|true|writeResetValue|"
-        "🚫 Disable Favorites Suggestions|com.apple.Safari|ShowFavoritesUnderSmartSearchField|false|true|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|👾 [Terminal]|⚠️  ${YE}(Must quit Terminal afterwards to reflect changes)${NC}"
+            "🗂️  Always show Tab Bar in Terminal|com.apple.Terminal|NSWindowTabbingShoudShowTabBarKey-TTWindow-TTWindowController-TTWindowController-VT-FS|true|false|false|writeResetValue|"
+            "🪟 Sets 'Basic' as the startup profile|com.apple.Terminal|Startup Window Settings|Basic|Clear Dark|Clear Dark|writeResetValue|${GY}Sets the startup Terminal window to 'Basic' instead of 'Clear Dark'${NC}"
+            "🪟 Sets 'Basic' as the default profile|com.apple.Terminal|Default Window Settings|Basic|Clear Dark|Clear Dark|writeResetValue|${GY}Sets the default Terminal window to 'Basic' instead of 'Clear Dark'${NC}"
+            "⭐️ Use bright colors for bold text ${GY}(must enable manually)${NC}|com.apple.Terminal|UseBrightBold|true|false|reset|UseBrightBoldInTerminal|${GY}This will be applied to only the window profiles that are currently set as your default. Note: Making this Active will currently fail. Please enable manually. Deactivate, Reset to Default and displaying state/value works as expected.${NC}"
+            "📂 Expand Save Panels by default in Terminal|com.apple.Terminal|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🌐 [Safari - Security]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🔒 Enable Safe Browsing|com.apple.Safari.SafeBrowsing|SafeBrowsingEnabled|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        "⚠️  Warn when visiting a fraudulent website|com.apple.Safari|WarnAboutFraudulentWebsites|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        # "🌐 Enable JavaScript (1 of 2)|com.apple.Safari|WebKitJavaScriptEnabled|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        # "🌐 Enable JavaScript (2 of 2)|com.apple.Safari|WebKitPreferences.javaScriptEnabled|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        "🌐 Warn before connecting to a website over HTTP|com.apple.Safari|UseHTTPSOnly|true|false|false|writeResetValue|"
-        # "🌐 Prevent cross-site tracking (1 of 3)|com.apple.Safari|BlockStoragePolicy|2|1|2|writeResetValue|${GY}(On by default)${NC}"
-        # "🌐 Prevent cross-site tracking (2 of 3)|com.apple.Safari|WebKitPreferences.storageBlockingPolicy|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        # "🌐 Prevent cross-site tracking (3 of 3)|com.apple.Safari|WebKitStorageBlockingPolicy|true|false|true|writeResetValue|${GY}(On by default)${NC}"
-        "🕵️‍♂️  Require password to view locked tabs in Private Browsing|com.apple.Safari|PrivateBrowsingRequiresAuthentication|true|false|false|writeResetValue|"
-        "🚫 Disallow Websites To Send Notifications|com.apple.Safari|CanPromptForPushNotifications|false|true|true|writeResetValue|"
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            # "GROUP|📊 [Activity Monitor]|"
+            # "🔄 Set Update Frequency to 1 Sec|com.apple.ActivityMonitor|UpdatePeriod|1|2|5|writeResetValue|"
+            # "🔄 Set Update Frequency to 1 Sec|com.apple.ActivityMonitor|UpdatePeriod|1|2|5|writeResetValue|"
 
-        # Array Format
-        # Header: "GROUP|Title|Subtext"
-        # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
-        "GROUP|🌐 [Safari - Advanced]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write changes)${NC}"
-        "🌐 Show full website URL in address bar|com.apple.Safari|ShowFullURLInSmartSearchField|true|false|false|writeResetValue|"
-        "🕵️‍♂️  Use advanced tracking and fingerprinting protection in ALL browsing|com.apple.Safari|EnableEnhancedPrivacyInRegularBrowsing|true|false|false|writeResetValue|${GY}The default is set to Private Browsing only.${NC} ${YE}(Note that this setting is prone to verification issues for certain websites)${NC}"
-        "🚫 Disallow privacy-preserving measurement of ad effectiveness|com.apple.Safari|WebKitPreferences.privateClickMeasurementEnabled|false|true|true|writeResetValue|"
-        "🛠  Show features for web developers|com.apple.Safari.SandboxBroker|ShowDevelopMenu|true|false|false|writeResetValue|Enables Safari's Developer menu"
-    )
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📅 [Calendar]|"
+            "🕛 Enable TimeZone Support|com.apple.iCal|TimeZone support enabled|true|false|false|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|💬 [Messages]|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "💬 Screen Unknown Senders ${BO}(FDA req. to read/write)${NC} ${BL}(Tahoe 26+)${NC}|com.apple.MobileSMS|FilterMessageRequests|true|false|false|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "💬 ${GY}Screen Unknown Senders (FDA req. to read/write) (Tahoe 26+)${NC}|com.apple.MobileSMS|FilterMessageRequests|true|false|false|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            "🚫 Disable Send Read Receipts|com.apple.imagent|Setting.EnableReadReceipts|false|true|true|DisableSendReadReceiptsIniMessage|"
+            # "🚫 Disable Send Read Receipts 2 of 2|com.apple.imagent|Setting.GlobalReadReceiptsVersionID|2|1|1|DisableSendReadReceiptsIniMessage|"
+            "💬 Disable Automatic Sharing|com.apple.SocialLayer|SharedWithYouEnabled|false|true|true|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🔎 [Preview]|"
+            "🗂️  Always show Tab Bar in Preview|com.apple.Preview|NSWindowTabbingShoudShowTabBarKey-PVWindow-PVWindowController-PVWindowController-VT-FS|true|false|false|writeResetValue|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "✏️  Show Markup toolbar for images by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|writeResetValue|"
+                "✏️  Show Markup toolbar for PDFs by default ${BL}(Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "✏️  ${GY}Show Markup toolbar for images by default (Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForImages|true|false|false|writeResetValue|"
+                "✏️  ${GY}Show Markup toolbar for PDFs by default (Tahoe 26+)${NC}|com.apple.Preview|PVMarkupToolbarVisibleForPDFs|true|false|false|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            "📂 Expand Save Panels by default in Preview|com.apple.Preview|NSNavPanelExpandedStateForSaveMode|true|false|false|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📞 [Phone]|${BL}(Tahoe 26+)${NC}"
+        )
+
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "📞 Enable Hold Assist ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|HoldAssistDetectionEnabled|true|false|true|writeResetValue|"
+                "📞 Enable Live Voicemail ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|CallScreeningDisabled|false|true|false|writeResetValue|"
+                "📞 Screen Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|ReceptionistDisabled|false|true|false|writeResetValue|${GY}Toggles on 'Ask Reason for Calling'${NC}"
+                "📞 Filter Unknown Callers ${BL}(Tahoe 26+)${NC}|com.apple.TelephonyUtilities|filterUnknownCallersAsNewCallers|true|false|true|writeResetValue|"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "📞 ${GY}Enable Hold Assist (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|HoldAssistDetectionEnabled|true|false|true|writeResetValue|"
+                "📞 ${GY}Enable Live Voicemail (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|CallScreeningDisabled|false|true|false|writeResetValue|"
+                "📞 ${GY}Screen Unknown Callers (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|ReceptionistDisabled|false|true|false|writeResetValue|${GY}Toggles on 'Ask Reason for Calling'${NC}"
+                "📞 ${GY}Filter Unknown Callers (Tahoe 26+)${NC}|com.apple.TelephonyUtilities|filterUnknownCallersAsNewCallers|true|false|true|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🎵 [Music]|"
+            "🚫 Disable Sound Check/Normalization|com.apple.Music|optimizeSongVolume|false|true|true|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🗜️  [Archive Utility]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]] && [[ "$MACOS_MINOR" -ge 4 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🗑️  Move archives to trash after expanding ${BL}(Tahoe 26.4+)${NC}|com.apple.archiveutility|dearchive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    "🗑️  ${GY}Move archives to trash after expanding (Tahoe 26.3 & below)${NC}|com.apple.archiveutility|dearchive-move-after|~/.Trash|.|.|writeResetValue|"
+                    "🗑️  Move files to trash after archiving ${BL}(Tahoe 26.4+)${NC}|com.apple.archiveutility|archive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    "🗑️  ${GY}Move files to trash after archiving (Tahoe 26.3 & below)${NC}|com.apple.archiveutility|archive-move-after|~/.Trash|.|.|writeResetValue|"
+                )
+            else
+                # hide unsupported
+                preference_commands+=(
+                    "🗑️  Move archives to trash after expanding ${BL}(Tahoe 26.4+)${NC}|com.apple.archiveutility|dearchive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    # "🗑️  ${GY}Move archives to trash after expanding (Tahoe 26.3 & below)${NC}|com.apple.archiveutility|dearchive-move-after|~/.Trash|.|.|writeResetValue|"
+                    "🗑️  Move files to trash after archiving ${BL}(Tahoe 26.4+)${NC}|com.apple.archiveutility|archive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    # "🗑️  ${GY}Move files to trash after archiving (Tahoe 26.3 & below)${NC}|com.apple.archiveutility|archive-move-after|~/.Trash|.|.|writeResetValue|"
+                )
+            fi
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🗑️  ${GY}Move archives to trash after expanding (Tahoe 26.4+)${NC}|com.apple.archiveutility|dearchive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    "🗑️  Move archives to trash after expanding ${BL}(Tahoe 26.3 & below)${NC}|com.apple.archiveutility|dearchive-move-after|~/.Trash|.|.|writeResetValue|"
+                    "🗑️  ${GY}Move files to trash after archiving (Tahoe 26.4+)${NC}|com.apple.archiveutility|archive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    "🗑️  Move files to trash after archiving ${BL}(Tahoe 26.3 & below)${NC}|com.apple.archiveutility|archive-move-after|~/.Trash|.|.|writeResetValue|"
+                )
+            else
+                # hide unsupported
+                preference_commands+=(
+                    # "🗑️  ${GY}Move archives to trash after expanding (Tahoe 26.4+)${NC}|com.apple.archiveutility|dearchive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    "🗑️  Move archives to trash after expanding ${BL}(Tahoe 26.3 & below)${NC}|com.apple.archiveutility|dearchive-move-after|~/.Trash|.|.|writeResetValue|"
+                    # "🗑️  ${GY}Move files to trash after archiving (Tahoe 26.4+)${NC}|com.apple.archiveutility|archive-move-after-location|MoveToTrash|UseSameFolder|UseSameFolder|NewArchiveUtilityDictIn26_4|"
+                    "🗑️  Move files to trash after archiving ${BL}(Tahoe 26.3 & below)${NC}|com.apple.archiveutility|archive-move-after|~/.Trash|.|.|writeResetValue|"
+                )
+            fi
+        fi
+        preference_commands+=(
+            "🚫 Don't reveal archives after expanding|com.apple.archiveutility|dearchive-reveal-after|false|true|true|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|📸 [Screen Capture]|"
+            "🚫 Disable Screenshot border and shadow|com.apple.screencapture|disable-shadow|true|false|false|writeResetValue|${GY}Removes default border and shadow from screenshots${NC}"
+            "🖼️  Set default Screenshot Format from PNG to JPG|com.apple.screencapture|type|jpg|png|png|writeResetValue|${GY}Note that although file size will be smaller, you will lose transparent backgrounds if choosing jpg${NC}"
+            "🚫 Disable Screenshot Preview Thumbnails|com.apple.screencapture|show-thumbnail|false|true|true|writeResetValue|${GY}Disables screenshot preview thumbnails in order to save and appear on the desktop immediately${NC}"
+            "🚫 Disable date and time in filenames|com.apple.screencapture|include-date|false|true|true|writeResetValue|"
+            "🚫 Don't Show Mouse Pointer in Screenshots|com.apple.screencapture|showsCursor|false|true|false|writeResetValue|${GY}(Inactive by default)${NC}"
+            "🎥 Show Mouse Clicks When Screen Recording|com.apple.screencapture|showsClicks|true|false|true|writeResetValue|${GY}(Inactive by default)${NC}"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🎥 [QuickTime Player]|"
+            "🗂️  Always Show Tab Bar in QuickTime|com.apple.QuickTimePlayerX|NSWindowTabbingShoudShowTabBarKey-NSWindow-MGDocumentWindowController-MGDocumentWindowController-VT-FS|true|false|false|writeResetValue|"
+            "▶️  Auto-play videos when opened with QuickTime Player|com.apple.QuickTimePlayerX|MGPlayMovieOnOpen|true|false|false|writeResetValue|"
+            "✨ Set Audio/Movie Recording Quality to 'Maximum' in QuickTime|com.apple.QuickTimePlayerX|MGRecordingCompressionPresetIdentifier|MGCompressionPresetMaximumQuality|MGCompressionPresetHighQuality|MGCompressionPresetHighQuality|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🌐 [Safari - General]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+            "🗂️  Always Show Tab Bar in Safari|com.apple.Safari|AlwaysShowTabBar|1|0|0|writeResetValue|"
+            "🌐 Show Overlay Status Bar|com.apple.Safari|ShowOverlayStatusBar|true|false|false|writeResetValue|"
+            "⭐️ Show Favorites Bar|com.apple.Safari|ShowFavoritesBar-v2|true|false|false|writeResetValue|"
+            "🎞️  Safari opens with all windows from last session|com.apple.Safari|AlwaysRestoreSessionAtLaunch|true|false|false|writeResetValue|"
+            "🌐 New windows open with Empty Page|com.apple.Safari|NewWindowBehavior|1|4|4|writeResetValue|"
+            "🌐 New tabs open with Empty Page|com.apple.Safari|NewTabBehavior|1|4|4|writeResetValue|"
+            "🚫 Disable Auto-Opening of 'Safe' Downloads|com.apple.Safari|AutoOpenSafeDownloads|false|true|false|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🌐 [Safari - Tabs]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+            "🗂️  Close Tabs Manually|com.apple.Safari|CloseTabsAutomatically|false|true|false|writeResetValue|${GY}(On by default)${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+            preference_commands+=(
+                "🗂️  Show Color in Tab Bar ${BL}(Tahoe 26+)${NC}|com.apple.Safari|NeverUseBackgroundColorInToolbar|false|true|false|writeResetValue|${GY}(On by default)${NC}"
+            )
+        elif [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+            # grey out unsupported
+            preference_commands+=(
+                "🗂️  ${GY}Show Color in Tab Bar (Tahoe 26+)${NC}|com.apple.Safari|NeverUseBackgroundColorInToolbar|false|true|false|writeResetValue|${GY}(On by default)${NC}"
+            )
+        fi
+        preference_commands+=(
+            "🌐 Always show website titles in tabs|com.apple.Safari|EnableNarrowTabs|false|true|true|writeResetValue|"
+            "🗂️  Command + Click opens a link in a new tab|com.apple.Safari|CommandClickMakesTabs|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+            "🚫 Don't make new tabs or windows active on command + click|com.apple.Safari|OpenNewTabsInFront|false|true|false|writeResetValue|"
+        )
+        if [[ "$MACOS_MAJOR" -eq 26 && "$MACOS_MINOR" -le 3 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🚫 ${GY}Disable compact tab layout (Sequoia 15 & below) or (Tahoe 26.4+)${NC}|com.apple.Safari|ShowStandaloneTabBar|true|false|true|writeResetValue|"
+                )
+            fi
+        else
+            # Sequoia ≤ 15 (supported) or Tahoe 26.4+ (supported)
+            preference_commands+=(
+                "🚫 Disable compact tab layout ${MA}(Sequoia 15 & below)${NC} or ${BL}(Tahoe 26.4+)${NC}|com.apple.Safari|ShowStandaloneTabBar|true|false|true|writeResetValue|"
+            )
+        fi
+        preference_commands+=(
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🌐 [Safari - AutoFill]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+            "🚫 Disable AutoFill Contacts|com.apple.Safari|AutoFillFromAddressBook|false|true|true|writeResetValue|"
+        )
+        if [[ "$MACOS_MAJOR" -ge 26 && "$MACOS_MINOR" -ge 4 ]] || [[ "$MACOS_MAJOR" -ge 15 && "$MACOS_MINOR" -ge 7 && "$MACOS_PATCH" -ge 5 ]]; then
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🚫 Disable AutoFill User Names & Passwords ${MA}(Sequoia 15.7.5+${NC}/${BL}Tahoe 26.4+)${NC}|com.apple.Safari|AutoFillPasswordsInSafari|false|true|true|DisableSafariPasswordAutoFillInTahoe26_4|${GY}Disables AutoFill in Safari only. (As of Sequoia 15.7.5/Tahoe 26.4, AutoFill in other apps is now controlled via the AutoFill preference under '🔑 [Passwords & AutoFill] - or System Settings > General > AutoFill & Passwords > AutoFill Passwords and Passkeys)${NC}"
+                    "🚫 ${GY}Disable AutoFill User Names & Passwords (Sequoia 15.7.4 & below/Tahoe 26.3 & below)${NC}|com.apple.Safari|AutoFillPasswords|false|true|true|DisableSafariPasswordAutoFillInTahoe26_3AndBelow|${GY}Disables AutoFill in Safari and other apps.${NC}"
+                )
+            else
+                # hide unsupported
+                preference_commands+=(
+                    "🚫 Disable AutoFill User Names & Passwords ${MA}(Sequoia 15.7.5+${NC}/${BL}Tahoe 26.4+)${NC}|com.apple.Safari|AutoFillPasswordsInSafari|false|true|true|DisableSafariPasswordAutoFillInTahoe26_4|${GY}Disables AutoFill in Safari only. (As of Sequoia 15.7.5/Tahoe 26.4, AutoFill in other apps is now controlled via the AutoFill preference under '🔑 [Passwords & AutoFill] - or System Settings > General > AutoFill & Passwords > AutoFill Passwords and Passkeys)${NC}"
+                    # "🚫 ${GY}Disable AutoFill User Names & Passwords (Sequoia 15.7.4 & below)/(Tahoe 26.3 & below)${NC}|com.apple.Safari|AutoFillPasswords|false|true|true|DisableSafariPasswordAutoFillInTahoe26_3AndBelow|${GY}Disables AutoFill in Safari and other apps.${NC}"
+                )
+            fi
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🚫 ${GY}Disable AutoFill User Names & Passwords (Sequoia 15.7.5+/Tahoe 26.4+)${NC}|com.apple.Safari|AutoFillPasswordsInSafari|false|true|true|DisableSafariPasswordAutoFillInTahoe26_4|${GY}Disables AutoFill in Safari only. (As of Sequoia 15.7.5/Tahoe 26.4, AutoFill in other apps is now controlled via the AutoFill preference under '🔑 [Passwords & AutoFill] - or System Settings > General > AutoFill & Passwords > AutoFill Passwords and Passkeys)${NC}"
+                    "🚫 Disable AutoFill User Names & Passwords ${MA}(Sequoia 15.7.4 & below${NC}/${BL}Tahoe 26.3 & below)${NC}|com.apple.Safari|AutoFillPasswords|false|true|true|DisableSafariPasswordAutoFillInTahoe26_3AndBelow|${GY}Disables AutoFill in Safari and other apps.${NC}"
+                )
+            else
+                # hide unsupported
+                preference_commands+=(
+                    # "🚫 ${GY}Disable AutoFill User Names & Passwords (Sequoia 15.7.5+/Tahoe 26.4+)${NC}|com.apple.Safari|AutoFillPasswordsInSafari|false|true|true|DisableSafariPasswordAutoFillInTahoe26_4|${GY}Disables AutoFill in Safari only. (As of Sequoia 15.7.5/Tahoe 26.4, AutoFill in other apps is now controlled via the AutoFill preference under '🔑 [Passwords & AutoFill] - or System Settings > General > AutoFill & Passwords > AutoFill Passwords and Passkeys)${NC}"
+                    "🚫 Disable AutoFill User Names & Passwords ${MA}(Sequoia 15.7.4 & below${NC}/${BL}Tahoe 26.3 & below)${NC}|com.apple.Safari|AutoFillPasswords|false|true|true|DisableSafariPasswordAutoFillInTahoe26_3AndBelow|${GY}Disables AutoFill in Safari and other apps.${NC}"
+                )
+            fi
+        fi
+        preference_commands+=(
+            "🚫 Disable AutoFill Credit Cards|com.apple.Safari|AutoFillCreditCardData|false|true|true|writeResetValue|"
+            "🚫 Disable AutoFill Other Forms|com.apple.Safari|AutoFillMiscellaneousForms|false|true|true|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🌐 [Safari - Search]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+            "🔎 Use DuckDuckGo as default search provider in ALL Browsing|com.apple.Safari|SearchProviderShortName|DuckDuckGo|Google|Google|writeResetValue|"
+            "🔎 Private Search Engine Uses Normal Search Engine|com.apple.Safari|PrivateSearchEngineUsesNormalSearchEngineToggle|true|false|true|writeResetValue|"
+            "🚫 Disable Search Engine Suggestions|com.apple.Safari|SuppressSearchSuggestions|true|false|false|writeResetValue|"
+            "🚫 Disable Safari Suggestions|com.apple.Safari|UniversalSearchEnabled|false|true|true|writeResetValue|"
+            "🚫 Disable Previously Visited Website Suggestions|com.apple.Safari|WebsiteSpecificSearchEnabled|false|true|true|writeResetValue|"
+            "🚫 Disable Preload Top Hit in the background|com.apple.Safari|PreloadTopHit|false|true|true|writeResetValue|"
+            "🚫 Disable Favorites Suggestions|com.apple.Safari|ShowFavoritesUnderSmartSearchField|false|true|true|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🌐 [Safari - Security]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+            "🔒 Enable Safe Browsing|com.apple.Safari.SafeBrowsing|SafeBrowsingEnabled|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+            "⚠️  Warn when visiting a fraudulent website|com.apple.Safari|WarnAboutFraudulentWebsites|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+            # "🌐 Enable JavaScript (1 of 2)|com.apple.Safari|WebKitJavaScriptEnabled|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+            # "🌐 Enable JavaScript (2 of 2)|com.apple.Safari|WebKitPreferences.javaScriptEnabled|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+        )
+        if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+            preference_commands+=(
+                "🌐 Warn before connecting to a website over HTTP ${YE}(macOS Ventura & above)${NC}|com.apple.Safari|UseHTTPSOnly|true|false|false|writeResetValue|"
+            )
+        else
+            if [[ "$HideIncompatible_macOS_Preferences" == "false" ]]; then
+                # grey out unsupported
+                preference_commands+=(
+                    "🌐 ${GY}Warn before connecting to a website over HTTP (macOS Ventura & above)${NC}|com.apple.Safari|UseHTTPSOnly|true|false|false|writeResetValue|"
+                )
+            fi
+        fi
+        preference_commands+=(
+            # "🌐 Prevent cross-site tracking (1 of 3)|com.apple.Safari|BlockStoragePolicy|2|1|2|writeResetValue|${GY}(On by default)${NC}"
+            # "🌐 Prevent cross-site tracking (2 of 3)|com.apple.Safari|WebKitPreferences.storageBlockingPolicy|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+            # "🌐 Prevent cross-site tracking (3 of 3)|com.apple.Safari|WebKitStorageBlockingPolicy|true|false|true|writeResetValue|${GY}(On by default)${NC}"
+            "🕵️‍♂️  Require password to view locked tabs in Private Browsing|com.apple.Safari|PrivateBrowsingRequiresAuthentication|true|false|false|writeResetValue|"
+            "🚫 Disallow Websites To Send Notifications|com.apple.Safari|CanPromptForPushNotifications|false|true|true|writeResetValue|"
+
+            # Array Format
+            # Header: "GROUP|Title|Subtext"
+            # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
+            "GROUP|🌐 [Safari - Advanced]|⚠️  ${YE}(Terminal requires Full Disk Access to read/write)${NC}"
+            "🌐 Show full website URL in address bar|com.apple.Safari|ShowFullURLInSmartSearchField|true|false|false|writeResetValue|"
+            "🕵️‍♂️  Use advanced tracking and fingerprinting protection in ALL browsing|com.apple.Safari|EnableEnhancedPrivacyInRegularBrowsing|true|false|false|writeResetValue|${GY}The default is set to Private Browsing only.${NC} ${YE}(Note that this setting is prone to verification issues for certain websites)${NC}"
+            "🚫 Disallow privacy-preserving measurement of ad effectiveness|com.apple.Safari|WebKitPreferences.privateClickMeasurementEnabled|false|true|true|writeResetValue|"
+            "🛠  Show features for web developers|com.apple.Safari.SandboxBroker|ShowDevelopMenu|true|false|false|writeResetValue|Enables Safari's Developer menu"
+        )
+    fi
     # Save original full array for filtering operations
     local original_preference_commands_full=("${preference_commands[@]}")
 
@@ -6965,7 +7650,7 @@ function macos_preferences() {
             21) echo "🔍 [Spotlight]" ;;
             22) echo "🔄 [Automatic Updates]" ;;
             23) echo "🤖 [Apple Intelligence]" ;;
-            24) echo "🔑 [Passwords]" ;;
+            24) echo "🔑 [Passwords & AutoFill]" ;;
             25) echo "📝 [TextEdit]" ;;
             26) echo "👾 [Terminal]" ;;
             27) echo "📅 [Calendar]" ;;
@@ -7040,754 +7725,862 @@ function macos_preferences() {
         local active_val="$4"
         local inactive_val="$5"
 
-        if [[ "$handler" == "sudo" ]]; then
-            echo "unknown"
-            return
-        fi
+        case "$handler" in
+            KeyboardShortcuts)
+                # Generic handler for keyboard shortcuts - parse active_val to check state
+                # active_val format: '{"Key1" = "value1"; "Key2" = "value2"}'
+                
+                local all_match=true
+                local any_exist=false
+                
+                # Parse the dictionary string to extract expected key-value pairs
+                local dict_content=$(echo "$active_val" | sed "s/^'{\"//" | sed "s/}'$//" | sed 's/"; "/";/g')
+                
+                # Split by semicolon and process each pair (bash 3.2 compatible)
+                local pairs=$(echo "$dict_content" | sed 's/; */;/g')
+                local IFS_SAVE="$IFS"
+                IFS=';'
+                for pair in $pairs; do
+                    IFS="$IFS_SAVE"
+                    if [[ -n "$pair" ]]; then
+                        # Extract key and expected value: "Key" = "value"
+                        local item_key=$(echo "$pair" | sed 's/^"//' | sed 's/" = .*$//')
+                        local expected_value=$(echo "$pair" | sed 's/^[^=]*= "//' | sed 's/"$//')
+                        
+                        if [[ -n "$item_key" ]] && [[ -n "$expected_value" ]]; then
+                            # Check if this key exists - use more precise pattern with word boundary
+                            local full_line=$(defaults read "$domain" "$key" 2>/dev/null | grep -E "^[[:space:]]*(\")?${item_key}(\")?[[:space:]]*=" || echo "")
 
-        if [[ "$domain" == "launchctl" ]]; then
-            echo "unknown"
-            return
-        fi
+                            if [[ -n "$full_line" ]]; then
+                                any_exist=true
+                                # Extract the value from the matched line
+                                local current_value=$(echo "$full_line" | sed 's/.*= "\(.*\)";/\1/')
 
-        # Handle ListViewColumns settings - check all locations
-        if [[ "$handler" == "ListViewColumns" ]]; then
-            local plist_file="$HOME/Library/Preferences/com.apple.finder.plist"
-            local all_match=true
-            local any_exist=false
-            
-            # Check all 3 base locations (each has 2 formats: ExtendedListViewSettingsV2 and ListViewSettings)
-            local locations=(
-                ":ICloudViewSettings"
-                ":StandardViewSettings"
-                ":FK_StandardViewSettings"
-            )
-            
-            for location in "${locations[@]}"; do
-                if check_list_view_columns_state "$plist_file" "$location"; then
-                    any_exist=true
+                                # Normalize backslashes for comparison
+                                local norm_current=$(echo "$current_value" | sed 's/\\\\/\\/g')
+                                local norm_expected=$(echo "$expected_value" | sed 's/\\\\/\\/g')
+
+                                # Normalize Unicode escape sequences to actual characters for specific domain
+                                # macOS reads back Unicode escapes as actual characters, so we need to convert
+                                # the expected value (which may contain \U####) to match what macOS returns
+                                if [[ "$domain" == "com.mothersruin.SuspiciousPackageApp" ]]; then
+                                    norm_expected=$(echo "$norm_expected" | sed 's/\\U005B/[/g' | sed 's/\\U005D/]/g')
+                                fi
+                                
+                                if [[ "$norm_current" != "$norm_expected" ]]; then
+                                    all_match=false
+                                fi
+                            else
+                                all_match=false
+                            fi
+                            
+                            # # Check if this key exists
+                            # local current_value=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" | sed 's/.*= "\(.*\)";/\1/' || echo "")
+                            # local key_exists=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" || echo "")
+                            
+                            # if [[ -n "$key_exists" ]]; then
+                            #     any_exist=true
+                            #     # Normalize backslashes for comparison
+                            #     local norm_current=$(echo "$current_value" | sed 's/\\\\/\\/g')
+                            #     local norm_expected=$(echo "$expected_value" | sed 's/\\\\/\\/g')
+                                
+                            #     if [[ "$norm_current" != "$norm_expected" ]]; then
+                            #         all_match=false
+                            #     fi
+                            # else
+                            #     all_match=false
+                            # fi
+                        fi
+                    fi
+                    IFS=';'
+                done
+                IFS="$IFS_SAVE"
+                
+                # Check results
+                if [[ "$all_match" == "true" ]] && [[ "$any_exist" == "true" ]]; then
+                    echo "active"
+                    return
+                elif [[ "$any_exist" == "true" ]]; then
+                    echo "custom"
+                    return
                 else
-                    # Check if columns exist at all (even if not matching)
-                    local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${location}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
-                    if [[ -n "$array_exists" ]] && [[ "$array_exists" != *"Doesn't Exist"* ]]; then
-                        any_exist=true
-                        all_match=false
+                    echo "inactive"
+                    return
+                fi
+                ;;
+            Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click)
+                # Handle trackpad tap to right click
+                if  [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
+                    [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "1" ]] &&
+                    [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "1" ]] &&
+                    [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "1" ]] &&
+                    [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
+                    [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "1" ]]; then
+                    echo "active"
+                    return
+                else
+                    if  [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "0" ]] &&
+                        [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "0" ]] &&
+                        [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "0" ]]; then
+                        echo "inactive"
+                        return
                     else
-                        all_match=false
+                        echo "custom"
+                        return
                     fi
                 fi
-            done
-            
-            if [[ "$all_match" == "true" ]] && [[ "$any_exist" == "true" ]]; then
-                echo "active"
-                return
-            elif [[ "$any_exist" == "true" ]]; then
-                echo "custom"
-                return
-            else
-                echo "default"
-                return
-            fi
-        fi
-
-        # Handle Desktop IconView settings - read from plist using PlistBuddy
-        if [[ "$handler" == "Desktop_IconView_showItemInfo" || "$handler" == "Desktop_IconView_labelOnBottom" || "$handler" == "Desktop_IconView_arrangeBy" || "$handler" == "Desktop_IconView_textSize" || "$handler" == "Desktop_IconView_iconSize" || "$handler" == "Desktop_IconView_gridSpacing" ]]; then
-            # Extract the PlistBuddy path from key (format: :DesktopViewSettings:IconViewSettings:showItemInfo)
-            local plist_path="$key"
-            # Read value and capture both stdout and exit code
-            local plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$domain" 2>&1)
-            local plist_exit=$?
-            local current_val=""
-            
-            # Check if command succeeded and output is valid
-            if [[ $plist_exit -eq 0 ]] && [[ -n "$plist_output" ]] && [[ "$plist_output" != *"Doesn't Exist"* ]] && [[ "$plist_output" != *"Will Create"* ]]; then
-                current_val="$plist_output"
-            else
-                # Key doesn't exist or error occurred
-                current_val=""
-            fi
-            
-            if [[ -z "$current_val" ]]; then
-                echo "default"
-                return
-            fi
-            
-            # Values are now stored directly (no extraction needed)
-            local active_val_extracted="$active_val"
-            local inactive_val_extracted="$inactive_val"
-            
-            # Normalize values for comparison
-            # Handle boolean values (true/false/1/0/YES/NO) and numeric values
-            local norm_current=$(echo "$current_val" | tr '[:upper:]' '[:lower:]')
-            local norm_active=$(echo "$active_val_extracted" | tr '[:upper:]' '[:lower:]')
-            local norm_inactive=$(echo "$inactive_val_extracted" | tr '[:upper:]' '[:lower:]')
-            
-            # Check if this is a numeric setting (textSize, iconSize, gridSpacing)
-            local is_numeric=false
-            if [[ "$handler" == "Desktop_IconView_textSize" || "$handler" == "Desktop_IconView_iconSize" || "$handler" == "Desktop_IconView_gridSpacing" ]]; then
-                is_numeric=true
-            fi
-            
-            # Normalize boolean representations (only for boolean/string settings)
-            if [[ "$is_numeric" == "false" ]]; then
-                if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
-                    norm_current="true"
-                elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
-                    norm_current="false"
+                ;;
+            ExpandTextEditSavePanels)
+                # Handle ExpandTextEditSavePanels
+                if  [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode)" == "1" ]] &&
+                    [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode2)" == "1" ]]; then
+                    echo "true"
+                    return
+                else
+                    if  [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode2)" == "0" ]]; then
+                        echo "false"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
                 fi
+                ;;
+            Show_Time_Machine_Menu_Bar_Item)
+                # Handle Time Machine menu bar item
+                # Check if TimeMachine is in menuExtras array
+                tm_in_array="false"
+                if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "TimeMachine"; then
+                    tm_in_array="true"
+                fi
+                # Get visibility setting
+                tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" 2>/dev/null || echo "0")
+                # Check if both conditions are met for "active" state
+                if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
+                    echo "active"
+                    return
+                else
+                    if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
+                        echo "inactive"
+                        return
+                    else
+                        echo "default"
+                        return
+                    fi
+                fi
+                ;;
+            Show_VPN_Menu_Bar_Item)
+                # Handle VPN menu bar item
+                # Check if VPN is in menuExtras array
+                tm_in_array="false"
+                if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "VPN"; then
+                    tm_in_array="true"
+                fi
+                # Get visibility setting
+                tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" 2>/dev/null || echo "0")
+                # Check if both conditions are met for "active" state
+                if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
+                    echo "active"
+                    return
+                else
+                    if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
+                        echo "inactive"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            disable_Apple_Intelligence)
+                # Handle Apple Intelligence - Check current state first
+                domain="com.apple.CloudSubscriptionFeatures.optIn"
+                
+                # Check if any keys are enabled (set to 1)
+                enabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 1;" | awk '{print $1}')
+                disabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 0;" | awk '{print $1}')
+                
+                if [[ -n "$enabled_keys" ]]; then
+                    echo "inactive"
+                    return
+                elif [[ -n "$disabled_keys" ]]; then
+                    echo "active" 
+                    return
+                else
+                    echo "custom"
+                    return
+                fi
+                ;;
+            DisableSpotlightRelatedContent)
+                if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+                    if defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null | grep -q "Custom.relatedContents"; then
+                        echo "active"
+                        return
+                    else
+                        echo "inactive"
+                        return
+                    fi
+                else
+                    echo "not set"
+                    return
+                fi
+                ;;
+            DisableMouseKeys)
+                # Read both related settings
+                local shortcut_val
+                local ignore_val
+                shortcut_val=$(defaults read com.apple.universalaccess useMouseKeysShortcutKeys 2>/dev/null || echo "")
+                ignore_val=$(defaults read com.apple.universalaccess mouseDriverIgnoreTrackpad 2>/dev/null || echo "")
+
+                # Normalize to lowercase strings
+                shortcut_val=$(echo "$shortcut_val" | tr '[:upper:]' '[:lower:]')
+                ignore_val=$(echo "$ignore_val" | tr '[:upper:]' '[:lower:]')
+
+                # Map numeric/YES/NO representations to booleans
+                if [[ "$shortcut_val" == "1" || "$shortcut_val" == "yes" ]]; then
+                    shortcut_val="true"
+                elif [[ "$shortcut_val" == "0" || "$shortcut_val" == "no" ]]; then
+                    shortcut_val="false"
+                fi
+
+                if [[ "$ignore_val" == "1" || "$ignore_val" == "yes" ]]; then
+                    ignore_val="true"
+                elif [[ "$ignore_val" == "0" || "$ignore_val" == "no" ]]; then
+                    ignore_val="false"
+                fi
+
+                # Both false  => preference is "active" (Mouse Keys disabled)
+                # Both true   => preference is "inactive" (Mouse Keys enabled)
+                # Mixed/other => "custom"
+                if [[ "$shortcut_val" == "false" && "$ignore_val" == "false" ]]; then
+                    echo "active"
+                    return
+                elif [[ "$shortcut_val" == "true" && "$ignore_val" == "true" ]]; then
+                    echo "inactive"
+                    return
+                else
+                    echo "custom"
+                    return
+                fi
+                ;;
+            ReduceSpotlightResultsInTahoe)
+                local spotlight_prefs=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+                
+                # Check if ALL the expected disabled items are present (reduced state is active)
+                if echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.calculator" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.iCal" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.AddressBook" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Dictionary" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.mail" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.MobileSMS" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Notes" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Photos" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.podcasts" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.reminders" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Safari" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.shortcuts" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.tips" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.VoiceMemos" && \
+                echo "$spotlight_prefs" | grep -q "System.documents" && \
+                echo "$spotlight_prefs" | grep -q "System.files" && \
+                echo "$spotlight_prefs" | grep -q "System.folders" && \
+                echo "$spotlight_prefs" | grep -q "System.iphoneApps" && \
+                echo "$spotlight_prefs" | grep -q "System.menuItems"; then
+                    
+                    # Now verify that System Settings and Apps are NOT disabled (not in the array)
+                    if ! echo "$spotlight_prefs" | grep -q "com.apple.systempreferences" && \
+                    ! echo "$spotlight_prefs" | grep -q "System.applications"; then
+                        echo "active"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                else
+                    # Check if it's the fully inactive state (no app/system identifiers)
+                    if ! echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
+                    ! echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
+                    ! echo "$spotlight_prefs" | grep -q "System.files" && \
+                    ! echo "$spotlight_prefs" | grep -q "System.folders"; then
+                        echo "inactive"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            ReduceSpotlightResultsInSequoia)
+                local ordered_items=$(defaults read com.apple.Spotlight orderedItems 2>/dev/null)
+                
+                # If key doesn't exist, return default
+                if [[ -z "$ordered_items" ]]; then
+                    echo "default"
+                    return
+                fi
+                
+                # Check if APPLICATIONS and SYSTEM_PREFS are enabled, and all others are disabled
+                # Use grep to find specific patterns in the output
+                local apps_enabled=false
+                local system_prefs_enabled=false
+                local other_items_disabled=true
+                
+                # Helper function to check if an item is enabled
+                # We'll look for the item name and check if enabled is 1/true in the same dictionary block
+                check_item_enabled() {
+                    local item_name="$1"
+                    local context=$(echo "$ordered_items" | grep -A 10 -B 2 "$item_name" | head -15)
+                    if echo "$context" | grep -qE "(enabled[[:space:]]*=[[:space:]]*(1|true|TRUE))"; then
+                        return 0
+                    fi
+                    return 1
+                }
+                
+                # Check APPLICATIONS
+                if check_item_enabled "APPLICATIONS"; then
+                    apps_enabled=true
+                fi
+                
+                # Check SYSTEM_PREFS
+                if check_item_enabled "SYSTEM_PREFS"; then
+                    system_prefs_enabled=true
+                fi
+                
+                # Check other items - they should all be disabled
+                # List of items that should be disabled (excluding APPLICATIONS and SYSTEM_PREFS)
+                local items_to_check=("MENU_EXPRESSION" "CONTACT" "MENU_CONVERSION" "MENU_DEFINITION" \
+                                    "DOCUMENTS" "EVENT_TODO" "DIRECTORIES" "FONTS" "IMAGES" "MESSAGES" \
+                                    "MOVIES" "MUSIC" "MENU_OTHER" "PDF" "PRESENTATIONS" \
+                                    "MENU_SPOTLIGHT_SUGGESTIONS" "SPREADSHEETS" "TIPS" "BOOKMARKS" "SOURCE")
+                
+                for item in "${items_to_check[@]}"; do
+                    if check_item_enabled "$item"; then
+                        other_items_disabled=false
+                        break
+                    fi
+                done
+                
+                # Check if state matches desired configuration
+                if [[ "$apps_enabled" == true ]] && [[ "$system_prefs_enabled" == true ]] && [[ "$other_items_disabled" == true ]]; then
+                    echo "active"
+                    return
+                else
+                    # Check if it's the default state (all items enabled or key doesn't exist)
+                    # If APPLICATIONS and SYSTEM_PREFS are enabled but we found other enabled items, it's custom
+                    if [[ "$apps_enabled" == true ]] && [[ "$system_prefs_enabled" == true ]] && [[ "$other_items_disabled" == false ]]; then
+                        echo "custom"
+                        return
+                    elif [[ "$apps_enabled" == false ]] || [[ "$system_prefs_enabled" == false ]]; then
+                        # If APPLICATIONS or SYSTEM_PREFS are disabled, it's likely inactive/default
+                        echo "inactive"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            "DisableCertainShareExtensions")
+                # Handle Share Extensions
+                local extensions=(
+                    # Items that exist on all macOS versions supported
+                    "com.apple.share.System.add-to-safari-reading-list"
+                    # "com.apple.CloudSharingUI.CopyLink"    # keep as is
+                    "com.apple.Notes.SharingExtension"
+                    "com.apple.share.System.add-to-iphoto"
+                    "com.apple.news.openinnews"
+                    "com.apple.reminders.sharingextension"
+                    "com.apple.iBooksX.SharingExtension"
+                    # "com.apple.CloudSharingUI.CreateiCloudLinkExtension"    # keep as is
+                )
+                # Version-specific additions
+                # if [[ "$MACOS_MAJOR" -ge 12 ]]; then
+                #     # Monterey+
+                #     extensions+=(
+                #         # "com.apple.shortcuts.Run-Workflow"    # Shortcuts app exists, not in Share menu until 13
+                #     )
+                # fi
+                if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                    # Ventura+
+                    extensions+=(
+                        "com.apple.shortcuts.Run-Workflow"    # Now appears in Share Menu
+                        "com.apple.freeform.sharingextension"    # Freeform added
+                    )
+                fi
+                if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+                    # Tahoe+
+                    extensions+=(
+                        "com.apple.journal.JournalShareExtension"    # Journal added
+                    )
+                fi
+
+                local ignored_count=0
+                local enabled_count=0
+                local present_count=0
+
+                for ext in "${extensions[@]}"; do
+                    # -m -A  : all known plugins (ignored or not)
+                    # -m     : only plugins that are currently active/enabled
+                    local all_output
+                    all_output=$(pluginkit -m -A -i "$ext" 2>/dev/null)
+
+                    # Extension not installed on this system — skip it entirely
+                    [[ -z "$all_output" ]] && continue
+
+                    present_count=$((present_count + 1))
+
+                    local active_output
+                    active_output=$(pluginkit -m -i "$ext" 2>/dev/null)
+
+                    if [[ -n "$active_output" ]]; then
+                        enabled_count=$((enabled_count + 1))
+                    else
+                        ignored_count=$((ignored_count + 1))
+                    fi
+                done
+
+                # ── Also account for the SharingPeopleSuggestions pref on macOS 13+ ──
+                if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                    present_count=$((present_count + 1))
+                    local pref_val
+                    pref_val=$(defaults read com.apple.Sharing SharingPeopleSuggestionsDisabled 2>/dev/null)
+                    if [[ "$pref_val" == "1" ]]; then
+                        ignored_count=$((ignored_count + 1))
+                    else
+                        # key missing (default) or explicitly 0 → suggestions are enabled
+                        enabled_count=$((enabled_count + 1))
+                    fi
+                fi
+
+                # ── Determine combined state ──
+                if [[ $present_count -eq 0 ]]; then
+                    echo "unknown"
+                elif [[ $ignored_count -eq $present_count ]]; then
+                    echo "active"      # all disabled  → feature is "on"
+                elif [[ $enabled_count -eq $present_count ]]; then
+                    echo "inactive"    # all enabled   → feature is "off"
+                else
+                    echo "custom"      # mixed
+                fi
+                ;;
+            NewArchiveUtilityDictIn26_4)
+                local result=$(defaults read $domain $key 2>/dev/null | awk '/Selection/ {print $3}' | tr -d '";')
+                if [[ "$result" == "MoveToTrash" ]]; then
+                    echo "active"
+                elif [[ "$result" == "UseSameFolder" ]]; then
+                    echo "inactive"
+                else
+                    echo "not set"
+                fi
+                return
+                ;;
+            ListViewColumns)
+                # Handle ListViewColumns settings - check all locations
+                local plist_file="$HOME/Library/Preferences/com.apple.finder.plist"
+                local all_match=true
+                local any_exist=false
+                
+                # Check all 3 base locations (each has 2 formats: ExtendedListViewSettingsV2 and ListViewSettings)
+                local locations=(
+                    ":ICloudViewSettings"
+                    ":StandardViewSettings"
+                    ":FK_StandardViewSettings"
+                )
+                
+                for location in "${locations[@]}"; do
+                    if check_list_view_columns_state "$plist_file" "$location"; then
+                        any_exist=true
+                    else
+                        # Check if columns exist at all (even if not matching)
+                        local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${location}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
+                        if [[ -n "$array_exists" ]] && [[ "$array_exists" != *"Doesn't Exist"* ]]; then
+                            any_exist=true
+                            all_match=false
+                        else
+                            all_match=false
+                        fi
+                    fi
+                done
+                
+                if [[ "$all_match" == "true" ]] && [[ "$any_exist" == "true" ]]; then
+                    echo "active"
+                    return
+                elif [[ "$any_exist" == "true" ]]; then
+                    echo "custom"
+                    return
+                else
+                    echo "default"
+                    return
+                fi
+                ;;
+            ListView_calculateAllSizes)
+                # Handle ListView settings - read all relevant paths using PlistBuddy
+                local plist_file="$domain"
+                local plist_paths=(
+                    ":ICloudViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":ICloudViewSettings:ListViewSettings:calculateAllSizes"
+                    ":FK_iCloudListViewSettingsV2:calculateAllSizes"
+                    ":StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":StandardViewSettings:ListViewSettings:calculateAllSizes"
+                    ":FK_DefaultListViewSettingsV2:calculateAllSizes"
+                    ":FK_StandardViewSettings:ListViewSettings:calculateAllSizes"
+                    ":FK_StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":TrashViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":TrashViewSettings:ListViewSettings:calculateAllSizes"
+                )
+                
+                local total=${#plist_paths[@]}
+                local active_count=0
+                local inactive_count=0
+                local missing_count=0
+                local custom_count=0
+                
+                # Normalize reference values once
+                local norm_active=$(echo "$active_val" | tr '[:upper:]' '[:lower:]')
+                local norm_inactive=$(echo "$inactive_val" | tr '[:upper:]' '[:lower:]')
                 if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
                     norm_active="true"
                 elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
                     norm_active="false"
                 fi
                 if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
-                    norm_inactive="false"
+                    norm_inactive="true"
                 elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
                     norm_inactive="false"
                 fi
-            fi
-            
-            # Compare values
-            if [[ "$norm_current" == "$norm_active" ]]; then
-                echo "active"
-                return
-            elif [[ "$norm_current" == "$norm_inactive" ]]; then
-                echo "inactive"
-                return
-            else
-                echo "custom"
-                return
-            fi
-        fi
-
-        # Handle IconView settings - read from plist using PlistBuddy
-        if [[ "$handler" == "IconView_variousSettings" ]]; then
-            # Determine which setting is being requested from the key suffix
-            local target_path="$key"
-            local setting_name="${target_path##*:}"
-            local plist_file="$domain"
-            
-            # Map setting name to all relevant plist paths (Finder, Save dialogs, iCloud)
-            local plist_paths=()
-            case "$setting_name" in
-                showItemInfo)
-                    plist_paths=(
-                        ":StandardViewSettings:IconViewSettings:showItemInfo"
-                        ":FK_StandardViewSettings:IconViewSettings:showItemInfo"
-                        ":ICloudViewSettings:IconViewSettings:showItemInfo"
-                    )
-                    ;;
-                labelOnBottom)
-                    plist_paths=(
-                        ":StandardViewSettings:IconViewSettings:labelOnBottom"
-                        ":FK_StandardViewSettings:IconViewSettings:labelOnBottom"
-                        ":ICloudViewSettings:IconViewSettings:labelOnBottom"
-                    )
-                    ;;
-                arrangeBy)
-                    plist_paths=(
-                        ":StandardViewSettings:IconViewSettings:arrangeBy"
-                        ":FK_StandardViewSettings:IconViewSettings:arrangeBy"
-                        ":ICloudViewSettings:IconViewSettings:arrangeBy"
-                    )
-                    ;;
-                textSize)
-                    plist_paths=(
-                        ":StandardViewSettings:IconViewSettings:textSize"
-                        ":FK_StandardViewSettings:IconViewSettings:textSize"
-                        ":ICloudViewSettings:IconViewSettings:textSize"
-                    )
-                    ;;
-                iconSize)
-                    plist_paths=(
-                        ":StandardViewSettings:IconViewSettings:iconSize"
-                        ":FK_StandardViewSettings:IconViewSettings:iconSize"
-                        ":ICloudViewSettings:IconViewSettings:iconSize"
-                    )
-                    ;;
-                gridSpacing)
-                    plist_paths=(
-                        ":StandardViewSettings:IconViewSettings:gridSpacing"
-                        ":FK_StandardViewSettings:IconViewSettings:gridSpacing"
-                        ":ICloudViewSettings:IconViewSettings:gridSpacing"
-                    )
-                    ;;
-                *)
-                    echo "unknown"
-                    return
-                    ;;
-            esac
-            
-            local total=${#plist_paths[@]}
-            local active_count=0
-            local inactive_count=0
-            local missing_count=0
-            local custom_count=0
-            
-            # Normalize reference values once
-            local norm_active=$(echo "$active_val" | tr '[:upper:]' '[:lower:]')
-            local norm_inactive=$(echo "$inactive_val" | tr '[:upper:]' '[:lower:]')
-            if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
-                norm_active="true"
-            elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
-                norm_active="false"
-            fi
-            if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
-                norm_inactive="true"
-            elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
-                norm_inactive="false"
-            fi
-            
-            for plist_path in "${plist_paths[@]}"; do
-                local plist_output
-                plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
-                local plist_exit=$?
                 
-                if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
-                    missing_count=$((missing_count + 1))
-                    continue
-                fi
-                
-                local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
-                if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
-                    norm_current="true"
-                elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
-                    norm_current="false"
-                fi
-                
-                if [[ "$norm_current" == "$norm_active" ]]; then
-                    active_count=$((active_count + 1))
-                elif [[ "$norm_current" == "$norm_inactive" ]]; then
-                    inactive_count=$((inactive_count + 1))
-                else
-                    custom_count=$((custom_count + 1))
-                fi
-            done
-            
-            if [[ $missing_count -eq $total ]]; then
-                echo "default"
-                return
-            fi
-            
-            if [[ $active_count -eq $total ]]; then
-                echo "active"
-                return
-            fi
-            
-            if [[ $inactive_count -eq $total ]] && [[ $missing_count -eq 0 ]]; then
-                echo "inactive"
-                return
-            fi
-            
-            echo "custom"
-            return
-        fi
-
-        # Handle ListView settings - read all relevant paths using PlistBuddy
-        if [[ "$handler" == "ListView_calculateAllSizes" ]]; then
-            local plist_file="$domain"
-            local plist_paths=(
-                ":ICloudViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                ":ICloudViewSettings:ListViewSettings:calculateAllSizes"
-                ":FK_iCloudListViewSettingsV2:calculateAllSizes"
-                ":StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                ":StandardViewSettings:ListViewSettings:calculateAllSizes"
-                ":FK_DefaultListViewSettingsV2:calculateAllSizes"
-                ":FK_StandardViewSettings:ListViewSettings:calculateAllSizes"
-                ":FK_StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                ":TrashViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                ":TrashViewSettings:ListViewSettings:calculateAllSizes"
-            )
-            
-            local total=${#plist_paths[@]}
-            local active_count=0
-            local inactive_count=0
-            local missing_count=0
-            local custom_count=0
-            
-            # Normalize reference values once
-            local norm_active=$(echo "$active_val" | tr '[:upper:]' '[:lower:]')
-            local norm_inactive=$(echo "$inactive_val" | tr '[:upper:]' '[:lower:]')
-            if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
-                norm_active="true"
-            elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
-                norm_active="false"
-            fi
-            if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
-                norm_inactive="true"
-            elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
-                norm_inactive="false"
-            fi
-            
-            for plist_path in "${plist_paths[@]}"; do
-                local plist_output
-                plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
-                local plist_exit=$?
-                
-                if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
-                    missing_count=$((missing_count + 1))
-                    continue
-                fi
-                
-                local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
-                if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
-                    norm_current="true"
-                elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
-                    norm_current="false"
-                fi
-                
-                if [[ "$norm_current" == "$norm_active" ]]; then
-                    active_count=$((active_count + 1))
-                elif [[ "$norm_current" == "$norm_inactive" ]]; then
-                    inactive_count=$((inactive_count + 1))
-                else
-                    custom_count=$((custom_count + 1))
-                fi
-            done
-            
-            if [[ $missing_count -eq $total ]]; then
-                echo "default"
-                return
-            fi
-            
-            if [[ $active_count -eq $total ]]; then
-                echo "active"
-                return
-            fi
-            
-            if [[ $inactive_count -eq $total ]] && [[ $missing_count -eq 0 ]]; then
-                echo "inactive"
-                return
-            fi
-            
-            echo "custom"
-            return
-        fi
-
-        if [[ "$handler" == "KeyboardShortcuts"* ]]; then
-            # Generic handler for keyboard shortcuts - parse active_val to check state
-            # active_val format: '{"Key1" = "value1"; "Key2" = "value2"}'
-            
-            local all_match=true
-            local any_exist=false
-            
-            # Parse the dictionary string to extract expected key-value pairs
-            local dict_content=$(echo "$active_val" | sed "s/^'{\"//" | sed "s/}'$//" | sed 's/"; "/";/g')
-            
-            # Split by semicolon and process each pair (bash 3.2 compatible)
-            local pairs=$(echo "$dict_content" | sed 's/; */;/g')
-            local IFS_SAVE="$IFS"
-            IFS=';'
-            for pair in $pairs; do
-                IFS="$IFS_SAVE"
-                if [[ -n "$pair" ]]; then
-                    # Extract key and expected value: "Key" = "value"
-                    local item_key=$(echo "$pair" | sed 's/^"//' | sed 's/" = .*$//')
-                    local expected_value=$(echo "$pair" | sed 's/^[^=]*= "//' | sed 's/"$//')
+                for plist_path in "${plist_paths[@]}"; do
+                    local plist_output
+                    plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
+                    local plist_exit=$?
                     
-                    if [[ -n "$item_key" ]] && [[ -n "$expected_value" ]]; then
-                        # Check if this key exists - use more precise pattern with word boundary
-                        local full_line=$(defaults read "$domain" "$key" 2>/dev/null | grep -E "^[[:space:]]*(\")?${item_key}(\")?[[:space:]]*=" || echo "")
-
-                        if [[ -n "$full_line" ]]; then
-                            any_exist=true
-                            # Extract the value from the matched line
-                            local current_value=$(echo "$full_line" | sed 's/.*= "\(.*\)";/\1/')
-
-                            # Normalize backslashes for comparison
-                            local norm_current=$(echo "$current_value" | sed 's/\\\\/\\/g')
-                            local norm_expected=$(echo "$expected_value" | sed 's/\\\\/\\/g')
-
-                            # Normalize Unicode escape sequences to actual characters for specific domain
-                            # macOS reads back Unicode escapes as actual characters, so we need to convert
-                            # the expected value (which may contain \U####) to match what macOS returns
-                            if [[ "$domain" == "com.mothersruin.SuspiciousPackageApp" ]]; then
-                                norm_expected=$(echo "$norm_expected" | sed 's/\\U005B/[/g' | sed 's/\\U005D/]/g')
-                            fi
-                            
-                            if [[ "$norm_current" != "$norm_expected" ]]; then
-                                all_match=false
-                            fi
-                        else
-                            all_match=false
-                        fi
-                        
-                        # # Check if this key exists
-                        # local current_value=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" | sed 's/.*= "\(.*\)";/\1/' || echo "")
-                        # local key_exists=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" || echo "")
-                        
-                        # if [[ -n "$key_exists" ]]; then
-                        #     any_exist=true
-                        #     # Normalize backslashes for comparison
-                        #     local norm_current=$(echo "$current_value" | sed 's/\\\\/\\/g')
-                        #     local norm_expected=$(echo "$expected_value" | sed 's/\\\\/\\/g')
-                            
-                        #     if [[ "$norm_current" != "$norm_expected" ]]; then
-                        #         all_match=false
-                        #     fi
-                        # else
-                        #     all_match=false
-                        # fi
+                    if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
+                        missing_count=$((missing_count + 1))
+                        continue
                     fi
-                fi
-                IFS=';'
-            done
-            IFS="$IFS_SAVE"
-            
-            # Check results
-            if [[ "$all_match" == "true" ]] && [[ "$any_exist" == "true" ]]; then
-                echo "active"
-                return
-            elif [[ "$any_exist" == "true" ]]; then
-                echo "custom"
-                return
-            else
-                echo "inactive"
-                return
-            fi
-        fi
-
-        # Complex payload types: treat as custom to avoid brittle deep comparisons
-        if [[ "$handler" == "key_equivalents" || "$handler" == "defaults_dict" || "$handler" == "defaults_array" || "$handler" == "plistbuddy" ]]; then
-            echo "custom"
-            return
-        fi
-        
-        if [[ "$handler" == "chflags" ]]; then
-            if [[ "$key" == "ShowLibrary" ]]; then
-                if [[ -d ~/Library ]] && [[ "$(ls -ldO ~/Library | grep hidden)" ]]; then
-                    echo "inactive"
-                    return
-                else
-                    echo "active"
-                    return
-                fi
-            fi
-            echo "unknown"
-            return
-        fi 
-
-        # Handle special cases that return large amounts of data
-        if [[ "$domain" == "com.apple.dock" && "$key" == "persistent-apps" ]]; then
-            local app_count=$(defaults read "$domain" "$key" 2>/dev/null | grep "CFBundleIdentifier" 2>/dev/null | wc -l 2>/dev/null || echo "0")
-            app_count=${app_count:-0}  # Ensure it's not empty
-            if [[ "$app_count" -gt 0 ]]; then
-                echo "custom"
-            else
-                echo "default"
-            fi
-            return
-        fi
-
-        # Handle trackpad tap to right click
-        if [[ "$handler" == "Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click" ]]; then
-            if [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
-               [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "1" ]] &&
-               [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "1" ]] &&
-               [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "1" ]] &&
-               [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
-               [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "1" ]]; then
-                echo "active"
-                return
-            else
-                if [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "0" ]] &&
-                   [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "0" ]] &&
-                   [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "0" ]]; then
-                    echo "inactive"
-                    return
-                else
-                    echo "custom"
-                    return
-                fi
-            fi
-        fi
-
-        # Handle Time Machine menu bar item
-        if [[ "$handler" == "Show_Time_Machine_Menu_Bar_Item" ]]; then
-            # Check if TimeMachine is in menuExtras array
-            tm_in_array="false"
-            if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "TimeMachine"; then
-                tm_in_array="true"
-            fi
-            # Get visibility setting
-            tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" 2>/dev/null || echo "0")
-            # Check if both conditions are met for "active" state
-            if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
-                echo "active"
-                return
-            else
-                if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
-                    echo "inactive"
-                    return
-                else
+                    
+                    local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
+                    if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
+                        norm_current="true"
+                    elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
+                        norm_current="false"
+                    fi
+                    
+                    if [[ "$norm_current" == "$norm_active" ]]; then
+                        active_count=$((active_count + 1))
+                    elif [[ "$norm_current" == "$norm_inactive" ]]; then
+                        inactive_count=$((inactive_count + 1))
+                    else
+                        custom_count=$((custom_count + 1))
+                    fi
+                done
+                
+                if [[ $missing_count -eq $total ]]; then
                     echo "default"
                     return
                 fi
-            fi
-        fi
-
-        # Handle VPN menu bar item
-        if [[ "$handler" == "Show_VPN_Menu_Bar_Item" ]]; then
-            # Check if VPN is in menuExtras array
-            tm_in_array="false"
-            if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "VPN"; then
-                tm_in_array="true"
-            fi
-            # Get visibility setting
-            tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" 2>/dev/null || echo "0")
-            # Check if both conditions are met for "active" state
-            if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
-                echo "active"
-                return
-            else
-                if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
-                    echo "inactive"
-                    return
-                else
-                    echo "custom"
-                    return
-                fi
-            fi
-        fi
-
-        if [[ "$handler" == "disable_Apple_Intelligence" ]]; then
-            # Handle Apple Intelligence - Check current state first
-            domain="com.apple.CloudSubscriptionFeatures.optIn"
-            
-            # Check if any keys are enabled (set to 1)
-            enabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 1;" | awk '{print $1}')
-            disabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 0;" | awk '{print $1}')
-            
-            if [[ -n "$enabled_keys" ]]; then
-                echo "inactive"
-                return
-            elif [[ -n "$disabled_keys" ]]; then
-                echo "active" 
-                return
-            else
-                echo "custom"
-                return
-            fi
-        fi    
-
-        if [[ "$handler" == "DisableSpotlightRelatedContent" ]]; then
-            if defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null | grep -q "Custom.relatedContents"; then
-                echo "active"
-                return
-            else
-                echo "inactive"
-                return
-            fi
-        fi
-
-        if [[ "$handler" == "DisableMouseKeys" ]]; then
-            # Read both related settings
-            local shortcut_val
-            local ignore_val
-            shortcut_val=$(defaults read com.apple.universalaccess useMouseKeysShortcutKeys 2>/dev/null || echo "")
-            ignore_val=$(defaults read com.apple.universalaccess mouseDriverIgnoreTrackpad 2>/dev/null || echo "")
-
-            # Normalize to lowercase strings
-            shortcut_val=$(echo "$shortcut_val" | tr '[:upper:]' '[:lower:]')
-            ignore_val=$(echo "$ignore_val" | tr '[:upper:]' '[:lower:]')
-
-            # Map numeric/YES/NO representations to booleans
-            if [[ "$shortcut_val" == "1" || "$shortcut_val" == "yes" ]]; then
-                shortcut_val="true"
-            elif [[ "$shortcut_val" == "0" || "$shortcut_val" == "no" ]]; then
-                shortcut_val="false"
-            fi
-
-            if [[ "$ignore_val" == "1" || "$ignore_val" == "yes" ]]; then
-                ignore_val="true"
-            elif [[ "$ignore_val" == "0" || "$ignore_val" == "no" ]]; then
-                ignore_val="false"
-            fi
-
-            # Both false  => preference is "active" (Mouse Keys disabled)
-            # Both true   => preference is "inactive" (Mouse Keys enabled)
-            # Mixed/other => "custom"
-            if [[ "$shortcut_val" == "false" && "$ignore_val" == "false" ]]; then
-                echo "active"
-                return
-            elif [[ "$shortcut_val" == "true" && "$ignore_val" == "true" ]]; then
-                echo "inactive"
-                return
-            else
-                echo "custom"
-                return
-            fi
-        fi
-
-        if [[ "$handler" == "ReduceSpotlightResultsInTahoe" ]]; then
-            spotlight_prefs=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-            
-            # Check if ALL the expected disabled items are present (reduced state is active)
-            if echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.calculator" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.iCal" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.AddressBook" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Dictionary" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.mail" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.MobileSMS" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Notes" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Photos" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.podcasts" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.reminders" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Safari" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.shortcuts" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.tips" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.VoiceMemos" && \
-            echo "$spotlight_prefs" | grep -q "System.documents" && \
-            echo "$spotlight_prefs" | grep -q "System.files" && \
-            echo "$spotlight_prefs" | grep -q "System.folders" && \
-            echo "$spotlight_prefs" | grep -q "System.iphoneApps" && \
-            echo "$spotlight_prefs" | grep -q "System.menuItems"; then
                 
-                # Now verify that System Settings and Apps are NOT disabled (not in the array)
-                if ! echo "$spotlight_prefs" | grep -q "com.apple.systempreferences" && \
-                ! echo "$spotlight_prefs" | grep -q "System.applications"; then
+                if [[ $active_count -eq $total ]]; then
                     echo "active"
                     return
-                else
-                    echo "custom"
+                fi
+                
+                if [[ $inactive_count -eq $total ]] && [[ $missing_count -eq 0 ]]; then
+                    echo "inactive"
                     return
                 fi
-            else
-                # Check if it's the fully inactive state (no app/system identifiers)
-                if ! echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
-                ! echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
-                ! echo "$spotlight_prefs" | grep -q "System.files" && \
-                ! echo "$spotlight_prefs" | grep -q "System.folders"; then
+                
+                echo "custom"
+                return
+                ;;
+            IconView_variousSettings)
+                # Handle IconView settings - read from plist using PlistBuddy
+                # Determine which setting is being requested from the key suffix
+                local target_path="$key"
+                local setting_name="${target_path##*:}"
+                local plist_file="$domain"
+                
+                # Map setting name to all relevant plist paths (Finder, Save dialogs, iCloud)
+                local plist_paths=()
+                case "$setting_name" in
+                    showItemInfo)
+                        plist_paths=(
+                            ":StandardViewSettings:IconViewSettings:showItemInfo"
+                            ":FK_StandardViewSettings:IconViewSettings:showItemInfo"
+                            ":ICloudViewSettings:IconViewSettings:showItemInfo"
+                        )
+                        ;;
+                    labelOnBottom)
+                        plist_paths=(
+                            ":StandardViewSettings:IconViewSettings:labelOnBottom"
+                            ":FK_StandardViewSettings:IconViewSettings:labelOnBottom"
+                            ":ICloudViewSettings:IconViewSettings:labelOnBottom"
+                        )
+                        ;;
+                    arrangeBy)
+                        plist_paths=(
+                            ":StandardViewSettings:IconViewSettings:arrangeBy"
+                            ":FK_StandardViewSettings:IconViewSettings:arrangeBy"
+                            ":ICloudViewSettings:IconViewSettings:arrangeBy"
+                        )
+                        ;;
+                    textSize)
+                        plist_paths=(
+                            ":StandardViewSettings:IconViewSettings:textSize"
+                            ":FK_StandardViewSettings:IconViewSettings:textSize"
+                            ":ICloudViewSettings:IconViewSettings:textSize"
+                        )
+                        ;;
+                    iconSize)
+                        plist_paths=(
+                            ":StandardViewSettings:IconViewSettings:iconSize"
+                            ":FK_StandardViewSettings:IconViewSettings:iconSize"
+                            ":ICloudViewSettings:IconViewSettings:iconSize"
+                        )
+                        ;;
+                    gridSpacing)
+                        plist_paths=(
+                            ":StandardViewSettings:IconViewSettings:gridSpacing"
+                            ":FK_StandardViewSettings:IconViewSettings:gridSpacing"
+                            ":ICloudViewSettings:IconViewSettings:gridSpacing"
+                        )
+                        ;;
+                    *)
+                        echo "unknown"
+                        return
+                        ;;
+                esac
+                
+                local total=${#plist_paths[@]}
+                local active_count=0
+                local inactive_count=0
+                local missing_count=0
+                local custom_count=0
+                
+                # Normalize reference values once
+                local norm_active=$(echo "$active_val" | tr '[:upper:]' '[:lower:]')
+                local norm_inactive=$(echo "$inactive_val" | tr '[:upper:]' '[:lower:]')
+                if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
+                    norm_active="true"
+                elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
+                    norm_active="false"
+                fi
+                if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
+                    norm_inactive="true"
+                elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
+                    norm_inactive="false"
+                fi
+                
+                for plist_path in "${plist_paths[@]}"; do
+                    local plist_output
+                    plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
+                    local plist_exit=$?
+                    
+                    if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
+                        missing_count=$((missing_count + 1))
+                        continue
+                    fi
+                    
+                    local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
+                    if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
+                        norm_current="true"
+                    elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
+                        norm_current="false"
+                    fi
+                    
+                    if [[ "$norm_current" == "$norm_active" ]]; then
+                        active_count=$((active_count + 1))
+                    elif [[ "$norm_current" == "$norm_inactive" ]]; then
+                        inactive_count=$((inactive_count + 1))
+                    else
+                        custom_count=$((custom_count + 1))
+                    fi
+                done
+                
+                if [[ $missing_count -eq $total ]]; then
+                    echo "default"
+                    return
+                fi
+                
+                if [[ $active_count -eq $total ]]; then
+                    echo "active"
+                    return
+                fi
+                
+                if [[ $inactive_count -eq $total ]] && [[ $missing_count -eq 0 ]]; then
+                    echo "inactive"
+                    return
+                fi
+                
+                echo "custom"
+                return
+                ;;
+            Desktop_IconView_showItemInfo|Desktop_IconView_labelOnBottom|Desktop_IconView_arrangeBy|Desktop_IconView_textSize|Desktop_IconView_iconSize|Desktop_IconView_gridSpacing)
+                # Handle Desktop IconView settings - read from plist using PlistBuddy
+                # Extract the PlistBuddy path from key (format: :DesktopViewSettings:IconViewSettings:showItemInfo)
+                local plist_path="$key"
+                # Read value and capture both stdout and exit code
+                local plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$domain" 2>&1)
+                local plist_exit=$?
+                local current_val=""
+                
+                # Check if command succeeded and output is valid
+                if [[ $plist_exit -eq 0 ]] && [[ -n "$plist_output" ]] && [[ "$plist_output" != *"Doesn't Exist"* ]] && [[ "$plist_output" != *"Will Create"* ]]; then
+                    current_val="$plist_output"
+                else
+                    # Key doesn't exist or error occurred
+                    current_val=""
+                fi
+                
+                if [[ -z "$current_val" ]]; then
+                    echo "default"
+                    return
+                fi
+                
+                # Values are now stored directly (no extraction needed)
+                local active_val_extracted="$active_val"
+                local inactive_val_extracted="$inactive_val"
+                
+                # Normalize values for comparison
+                # Handle boolean values (true/false/1/0/YES/NO) and numeric values
+                local norm_current=$(echo "$current_val" | tr '[:upper:]' '[:lower:]')
+                local norm_active=$(echo "$active_val_extracted" | tr '[:upper:]' '[:lower:]')
+                local norm_inactive=$(echo "$inactive_val_extracted" | tr '[:upper:]' '[:lower:]')
+                
+                # Check if this is a numeric setting (textSize, iconSize, gridSpacing)
+                local is_numeric=false
+                if [[ "$handler" == "Desktop_IconView_textSize" || "$handler" == "Desktop_IconView_iconSize" || "$handler" == "Desktop_IconView_gridSpacing" ]]; then
+                    is_numeric=true
+                fi
+                
+                # Normalize boolean representations (only for boolean/string settings)
+                if [[ "$is_numeric" == "false" ]]; then
+                    if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
+                        norm_current="true"
+                    elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
+                        norm_current="false"
+                    fi
+                    if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
+                        norm_active="true"
+                    elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
+                        norm_active="false"
+                    fi
+                    if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
+                        norm_inactive="false"
+                    elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
+                        norm_inactive="false"
+                    fi
+                fi
+                
+                # Compare values
+                if [[ "$norm_current" == "$norm_active" ]]; then
+                    echo "active"
+                    return
+                elif [[ "$norm_current" == "$norm_inactive" ]]; then
                     echo "inactive"
                     return
                 else
                     echo "custom"
                     return
                 fi
-            fi
-        fi
+                ;;
+            key_equivalents|defaults_dict|defaults_array|plistbuddy)
+                # Complex payload types: treat as custom to avoid brittle deep comparisons
+                echo "custom"
+                return
+                ;;
+            UseBrightBoldInTerminal)
+                # if [[ "$handler" == "UseBrightBoldInTerminal" ]]; then
+                #     # Check a specific Window Setting 
+                #     # value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':Basic:UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
+                    
+                #     # Check if used for ANY Window Setting
+                #     value=$(defaults read com.apple.Terminal | grep -q "UseBrightBold = 1" && echo "true" || echo "false")
+                    
+                #     if [[ "$value" == "false" ]]; then
+                #         echo "inactive"
+                #     elif [[ "$value" == "true" ]] ; then
+                #         echo "active"
+                #     else
+                #         echo "default"
+                #     fi
+                #     return
+                # fi
+                
+                default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
+                startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
 
-        if [[ "$handler" == "ReduceSpotlightResultsInSequoia" ]]; then
-            local ordered_items=$(defaults read com.apple.Spotlight orderedItems 2>/dev/null)
-            
-            # If key doesn't exist, return default
-            if [[ -z "$ordered_items" ]]; then
+                for profile in "$default_profile" "$startup_profile"; do
+                    [[ -z "$profile" ]] && continue
+                    value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
+                    case "$value" in
+                        true)  echo "active";  return ;;
+                        false) echo "inactive"; return ;;
+                    esac
+                done
                 echo "default"
                 return
-            fi
-            
-            # Check if APPLICATIONS and SYSTEM_PREFS are enabled, and all others are disabled
-            # Use grep to find specific patterns in the output
-            local apps_enabled=false
-            local system_prefs_enabled=false
-            local other_items_disabled=true
-            
-            # Helper function to check if an item is enabled
-            # We'll look for the item name and check if enabled is 1/true in the same dictionary block
-            check_item_enabled() {
-                local item_name="$1"
-                local context=$(echo "$ordered_items" | grep -A 10 -B 2 "$item_name" | head -15)
-                if echo "$context" | grep -qE "(enabled[[:space:]]*=[[:space:]]*(1|true|TRUE))"; then
-                    return 0
-                fi
-                return 1
-            }
-            
-            # Check APPLICATIONS
-            if check_item_enabled "APPLICATIONS"; then
-                apps_enabled=true
-            fi
-            
-            # Check SYSTEM_PREFS
-            if check_item_enabled "SYSTEM_PREFS"; then
-                system_prefs_enabled=true
-            fi
-            
-            # Check other items - they should all be disabled
-            # List of items that should be disabled (excluding APPLICATIONS and SYSTEM_PREFS)
-            local items_to_check=("MENU_EXPRESSION" "CONTACT" "MENU_CONVERSION" "MENU_DEFINITION" \
-                                  "DOCUMENTS" "EVENT_TODO" "DIRECTORIES" "FONTS" "IMAGES" "MESSAGES" \
-                                  "MOVIES" "MUSIC" "MENU_OTHER" "PDF" "PRESENTATIONS" \
-                                  "MENU_SPOTLIGHT_SUGGESTIONS" "SPREADSHEETS" "TIPS" "BOOKMARKS" "SOURCE")
-            
-            for item in "${items_to_check[@]}"; do
-                if check_item_enabled "$item"; then
-                    other_items_disabled=false
-                    break
-                fi
-            done
-            
-            # Check if state matches desired configuration
-            if [[ "$apps_enabled" == true ]] && [[ "$system_prefs_enabled" == true ]] && [[ "$other_items_disabled" == true ]]; then
-                echo "active"
+                ;;
+            sudo)
+                echo "unknown"
                 return
-            else
-                # Check if it's the default state (all items enabled or key doesn't exist)
-                # If APPLICATIONS and SYSTEM_PREFS are enabled but we found other enabled items, it's custom
-                if [[ "$apps_enabled" == true ]] && [[ "$system_prefs_enabled" == true ]] && [[ "$other_items_disabled" == false ]]; then
-                    echo "custom"
-                    return
-                elif [[ "$apps_enabled" == false ]] || [[ "$system_prefs_enabled" == false ]]; then
-                    # If APPLICATIONS or SYSTEM_PREFS are disabled, it's likely inactive/default
-                    echo "inactive"
-                    return
-                else
-                    echo "custom"
-                    return
+                ;;
+            chflags)
+                if [[ "$key" == "ShowLibrary" ]]; then
+                    if [[ -d ~/Library ]] && [[ "$(ls -ldO ~/Library | grep hidden)" ]]; then
+                        echo "inactive"
+                        return
+                    else
+                        echo "active"
+                        return
+                    fi
                 fi
+                echo "unknown"
+                return
+                ;;
+            launchctl)
+                echo "unknown"
+                return
+                ;;
+        esac
+
+        # Handle special cases that return large amounts of data
+        if [[ "$domain" == "com.apple.dock" && "$key" == "persistent-apps" ]]; then
+            # Count the number of apps currently in the Dock (excluding Finder)
+            local app_count=$(defaults read "$domain" "$key" 2>/dev/null \
+                | grep "file-label" 2>/dev/null \
+                | wc -l 2>/dev/null \
+                | xargs || echo "0")
+
+            app_count=${app_count:-0}    # Ensure it's not empty
+            local total_app_count=$((app_count + 1))    # Add 1 for the Finder Dock icon
+
+            # Output updated count including Finder
+            if [[ "$total_app_count" -gt 1 ]]; then
+                # echo "$total_app_count app(s) currently in Dock"
+                echo "inactive"
+            else
+                # echo "All apps removed (except for Finder)"
+                echo "active"
             fi
-        fi
-
-        # if [[ "$handler" == "UseBrightBoldInTerminal" ]]; then
-        #     # Check a specific Window Setting 
-        #     # value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':Basic:UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
-            
-        #     # Check if used for ANY Window Setting
-        #     value=$(defaults read com.apple.Terminal | grep -q "UseBrightBold = 1" && echo "true" || echo "false")
-            
-        #     if [[ "$value" == "false" ]]; then
-        #         echo "inactive"
-        #     elif [[ "$value" == "true" ]] ; then
-        #         echo "active"
-        #     else
-        #         echo "default"
-        #     fi
-        #     return
-        # fi
-
-        if [[ "$handler" == "UseBrightBoldInTerminal" ]]; then
-            default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
-            startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
-
-            for profile in "$default_profile" "$startup_profile"; do
-                [[ -z "$profile" ]] && continue
-                value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
-                case "$value" in
-                    true)  echo "active";  return ;;
-                    false) echo "inactive"; return ;;
-                esac
-            done
-            echo "default"
             return
         fi
 
-        local current_value
-
-        current_value=$(defaults read "$domain" "$key" 2>/dev/null || echo "")
-
-        # Handle currentHost handler
-        if [[ "$handler" == *"-currentHost"* ]]; then
-            current_value=$(defaults -currentHost read "$domain" "$key" 2>/dev/null || echo "not set")
+        if [[ "$handler" == "-currentHost" ]]; then
+            local current_value=$(defaults -currentHost read "$domain" "$key" 2>/dev/null || echo "not set")
             if [[ -z "$current_value" ]]; then
                 echo "default"
                 return
             fi
-        fi   
+        else
+            local current_value=$(defaults read "$domain" "$key" 2>/dev/null || echo "")
+        fi
 
         # if [[ -z "$current_value" ]]; then
         #     echo "default"
@@ -7853,595 +8646,621 @@ function macos_preferences() {
         local key="$2"
         local handler="$3"
         
-        if [[ "$handler" == "sudo" ]]; then
-            echo "sudo command - cannot read current value"
-            return
-        fi
-        
-        if [[ "$handler" == "chflags" ]]; then
-            if [[ "$key" == "ShowLibrary" ]]; then
-                # if [[ -d ~/Library ]] && [[ "$(ls -la ~/ | grep Library | grep hidden)" ]]; then
-                if [[ -d ~/Library ]] && [[ $(ls -lOd ~/Library 2>/dev/null | awk '{print $5}') == *"hidden"* ]]; then
-                    echo "hidden"
-                    return
-                else
-                    echo "visible"
-                    return
-                fi
-            fi
-            echo "unknown"
-            return
-        fi
-
-        # Handle ListViewColumns settings - show summary of current column configurations
-        if [[ "$handler" == "ListViewColumns" ]]; then
-            local plist_file="$HOME/Library/Preferences/com.apple.finder.plist"
-            local locations=(
-                "iCloud:ExtendedListViewSettingsV2|:ICloudViewSettings"
-                "iCloud:ListViewSettings|:ICloudViewSettings"
-                "Standard:ExtendedListViewSettingsV2|:StandardViewSettings"
-                "Standard:ListViewSettings|:StandardViewSettings"
-                "Save Panels:ExtendedListViewSettingsV2|:FK_StandardViewSettings"
-                "Save Panels:ListViewSettings|:FK_StandardViewSettings"
-            )
-            local summary=""
-            local match_count=0
-            local exist_count=0
-            
-            for location_info in "${locations[@]}"; do
-                IFS='|' read -r location_name location_path <<< "$location_info"
-                if check_list_view_columns_state "$plist_file" "$location_path"; then
-                    summary="${summary}${location_name}: ✅ configured\n"
-                    ((match_count++))
-                    ((exist_count++))
-                else
-                    local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${location_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
-                    if [[ -n "$array_exists" ]] && [[ "$array_exists" != *"Doesn't Exist"* ]]; then
-                        summary="${summary}${location_name}: ⚠️  custom (not matching)\n"
-                        ((exist_count++))
-                    else
-                        summary="${summary}${location_name}: ❌ default\n"
-                    fi
-                fi
-            done
-            
-            if [[ $match_count -eq 6 ]]; then
-                echo -e "All locations configured correctly:\n${summary}"
-            elif [[ $exist_count -gt 0 ]]; then
-                echo -e "Some locations customized:\n${summary}"
-            else
-                echo -e "All locations at default:\n${summary}"
-            fi
-            return
-        fi
-
-        # Handle Desktop IconView settings - read from plist using PlistBuddy
-        if [[ "$handler" == "Desktop_IconView_showItemInfo" || "$handler" == "Desktop_IconView_labelOnBottom" || "$handler" == "Desktop_IconView_arrangeBy" || "$handler" == "Desktop_IconView_textSize" || "$handler" == "Desktop_IconView_iconSize" || "$handler" == "Desktop_IconView_gridSpacing" ]]; then
-            local plist_path="$key"
-            # Read value and capture both stdout and exit code
-            local plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$domain" 2>&1)
-            local plist_exit=$?
-            local current_val=""
-            
-            # Check if command succeeded and output is valid
-            if [[ $plist_exit -eq 0 ]] && [[ -n "$plist_output" ]] && [[ "$plist_output" != *"Doesn't Exist"* ]] && [[ "$plist_output" != *"Will Create"* ]]; then
-                current_val="$plist_output"
-            else
-                current_val="not set"
-            fi
-            
-            echo "$current_val"
-            return
-        fi
-
-        # Handle ListView settings - read all relevant paths using PlistBuddy
-        if [[ "$handler" == "ListView_calculateAllSizes" ]]; then
-            local plist_file="$domain"
-            local locations=(
-                "     iCloud (Extended)  |:ICloudViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                "     iCloud (ListView)  |:ICloudViewSettings:ListViewSettings:calculateAllSizes"
-                "     iCloud (Dialogs)   |:FK_iCloudListViewSettingsV2:calculateAllSizes"
-                "     Finder (Extended)  |:StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                "     Finder (ListView)  |:StandardViewSettings:ListViewSettings:calculateAllSizes"
-                "     Finder (FKDefault) |:FK_DefaultListViewSettingsV2:calculateAllSizes"
-                "     Finder (FKStandard)|:FK_StandardViewSettings:ListViewSettings:calculateAllSizes"
-                "     Finder (FKStandard)|:FK_StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                "     Trash  (Extended)  |:TrashViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                "     Trash  (ListView)  |:TrashViewSettings:ListViewSettings:calculateAllSizes"
-            )
-            
-            local summary=""
-            local total=${#locations[@]}
-            local active_count=0
-            local inactive_count=0
-            local missing_count=0
-            
-            for location_info in "${locations[@]}"; do
-                IFS='|' read -r location_name plist_path <<< "$location_info"
-                local plist_output
-                plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
-                local plist_exit=$?
+        case "$handler" in
+            KeyboardShortcuts)
+                # Generic handler for keyboard shortcuts - display current values
+                # Parse active_val to know which keys to look for
                 
-                if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
-                    summary="${summary}${location_name}: ❌ default (not set)\n"
-                    missing_count=$((missing_count + 1))
-                    continue
-                fi
+                local value_parts=()
                 
-                local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
-                if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
-                    norm_current="true"
-                elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
-                    norm_current="false"
-                fi
+                # Parse the dictionary string to extract expected keys
+                local dict_content=$(echo "$active_val" | sed "s/^'{\"//" | sed "s/}'$//" | sed 's/"; "/";/g')
                 
-                if [[ "$norm_current" == "true" ]]; then
-                    summary="${summary}${location_name}: ✅ true\n"
-                    active_count=$((active_count + 1))
-                elif [[ "$norm_current" == "false" ]]; then
-                    summary="${summary}${location_name}: ❌ false\n"
-                    inactive_count=$((inactive_count + 1))
-                else
-                    summary="${summary}${location_name}: ⚠️  custom (${plist_output})\n"
-                fi
-            done
-            
-            if [[ $active_count -eq $total ]]; then
-                echo -e "All locations set to true:\n${summary}"
-            elif [[ $missing_count -eq $total ]]; then
-                echo -e "All locations at default:\n${summary}"
-            else
-                echo -e "Current values:\n${summary}"
-            fi
-            return
-        fi
-
-        # Handle IconView settings - read from plist using PlistBuddy
-        if [[ "$handler" == "IconView_variousSettings" ]]; then
-            local plist_file="$domain"
-            local target_path="$key"
-            local setting_name="${target_path##*:}"
-            
-            local locations=(
-                "          Finder Windows|:StandardViewSettings:IconViewSettings:${setting_name}"
-                "          Save Dialogs  |:FK_StandardViewSettings:IconViewSettings:${setting_name}"
-                "          iCloud Drive  |:ICloudViewSettings:IconViewSettings:${setting_name}"
-            )
-            
-            # Normalize reference values (can be bool, string, or numeric)
-            local norm_active=$(echo "$active_val" | tr '[:upper:]' '[:lower:]')
-            local norm_inactive=$(echo "$inactive_val" | tr '[:upper:]' '[:lower:]')
-            if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
-                norm_active="true"
-            elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
-                norm_active="false"
-            fi
-            if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
-                norm_inactive="true"
-            elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
-                norm_inactive="false"
-            fi
-            
-            local summary=""
-            local total=${#locations[@]}
-            local active_count=0
-            local inactive_count=0
-            local missing_count=0
-            
-            for location_info in "${locations[@]}"; do
-                IFS='|' read -r location_name plist_path <<< "$location_info"
-                local plist_output
-                plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
-                local plist_exit=$?
-                
-                if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
-                    summary="${summary}${location_name}: ❌ default (not set)\n"
-                    missing_count=$((missing_count + 1))
-                    continue
-                fi
-                
-                local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
-                if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
-                    norm_current="true"
-                elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
-                    norm_current="false"
-                fi
-                
-                if [[ -n "$active_val" && "$norm_current" == "$norm_active" ]]; then
-                    # Matches the defined "active" value
-                    summary="${summary}${location_name}: ✅ active   (${plist_output})\n"
-                    active_count=$((active_count + 1))
-                elif [[ -n "$inactive_val" && "$norm_current" == "$norm_inactive" ]]; then
-                    # Matches the defined "inactive" value
-                    summary="${summary}${location_name}: ❌ inactive (${plist_output})\n"
-                    inactive_count=$((inactive_count + 1))
-                else
-                    # Anything else is treated as custom
-                    summary="${summary}${location_name}: ⚠️  custom   (${plist_output})\n"
-                fi
-            done
-            
-            if [[ $missing_count -eq $total ]]; then
-                echo -e "All locations at default:\n${summary}"
-            else
-                echo -e "Current values:\n${summary}"
-            fi
-            return
-        fi
-
-        # Complex payload types: don't try to print giant dicts/arrays; indicate custom
-        if [[ "$handler" == "key_equivalents" || "$handler" == "defaults_dict" || "$handler" == "defaults_array" || "$handler" == "plistbuddy" ]]; then
-            echo "custom"
-            return
-        fi
-
-        if [[ "$handler" == "KeyboardShortcuts"* ]]; then
-            # Generic handler for keyboard shortcuts - display current values
-            # Parse active_val to know which keys to look for
-            
-            local value_parts=()
-            
-            # Parse the dictionary string to extract expected keys
-            local dict_content=$(echo "$active_val" | sed "s/^'{\"//" | sed "s/}'$//" | sed 's/"; "/";/g')
-            
-            # Split by semicolon and process each pair (bash 3.2 compatible)
-            local pairs=$(echo "$dict_content" | sed 's/; */;/g')
-            local IFS_SAVE="$IFS"
-            IFS=';'
-            for pair in $pairs; do
-                IFS="$IFS_SAVE"
-                if [[ -n "$pair" ]]; then
-                    # Extract key: "Key" = "value"
-                    local item_key=$(echo "$pair" | sed 's/^"//' | sed 's/" = .*$//')
-                    
-                    if [[ -n "$item_key" ]]; then
-                        # Use more precise pattern to match the exact key
-                        local full_line=$(defaults read "$domain" "$key" 2>/dev/null | grep -E "^[[:space:]]*(\")?${item_key}(\")?[[:space:]]*=" || echo "")
+                # Split by semicolon and process each pair (bash 3.2 compatible)
+                local pairs=$(echo "$dict_content" | sed 's/; */;/g')
+                local IFS_SAVE="$IFS"
+                IFS=';'
+                for pair in $pairs; do
+                    IFS="$IFS_SAVE"
+                    if [[ -n "$pair" ]]; then
+                        # Extract key: "Key" = "value"
+                        local item_key=$(echo "$pair" | sed 's/^"//' | sed 's/" = .*$//')
                         
-                        if [[ -n "$full_line" ]]; then
-                            # Extract the value from the matched line
-                            local current_value=$(echo "$full_line" | sed 's/.*= "\(.*\)";/\1/')
+                        if [[ -n "$item_key" ]]; then
+                            # Use more precise pattern to match the exact key
+                            local full_line=$(defaults read "$domain" "$key" 2>/dev/null | grep -E "^[[:space:]]*(\")?${item_key}(\")?[[:space:]]*=" || echo "")
                             
-                            if [[ -n "$current_value" ]]; then
-                                value_parts+=("\"$item_key\" = \"$current_value\"")
-                            else
-                                value_parts+=("\"$item_key\" (exists)")
+                            if [[ -n "$full_line" ]]; then
+                                # Extract the value from the matched line
+                                local current_value=$(echo "$full_line" | sed 's/.*= "\(.*\)";/\1/')
+                                
+                                if [[ -n "$current_value" ]]; then
+                                    value_parts+=("\"$item_key\" = \"$current_value\"")
+                                else
+                                    value_parts+=("\"$item_key\" (exists)")
+                                fi
                             fi
                         fi
-                    fi
-                    
-                    #     local current_value=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" | sed 's/.*= "\(.*\)";/\1/' || echo "")
-                    #     local key_exists=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" || echo "")
                         
-                    #     if [[ -n "$key_exists" ]]; then
-                    #         if [[ -n "$current_value" ]]; then
-                    #             value_parts+=("\"$item_key\" = \"$current_value\"")
-                    #         else
-                    #             value_parts+=("\"$item_key\" (exists)")
-                    #         fi
-                    #     fi
-                    # fi
-                fi
-                IFS=';'
-            done
-            IFS="$IFS_SAVE"
-            
-            if [[ ${#value_parts[@]} -eq 0 ]]; then
-                echo "Not set"
-            else
-                # Join with " & " separator
-                local IFS=" & "
-                echo "${value_parts[*]}"
-            fi
-            return
-        fi
-
-        # Handle trackpad tap to right click
-        if [[ "$handler" == "Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click" ]]; then
-            if [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
-               [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "1" ]] &&
-               [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "1" ]] &&
-               [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "1" ]] &&
-               [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
-               [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "1" ]]; then
-                echo "true"
-                return
-            else
-                if [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "0" ]] &&
-                   [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "0" ]] &&
-                   [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "0" ]]; then
-                    echo "false"
-                    return
-                else
-                    echo "custom"
-                    return
-                fi
-            fi
-        fi
-
-        # Handle ExpandTextEditSavePanels
-        if [[ "$handler" == "ExpandTextEditSavePanels" ]]; then
-            if [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode)" == "1" ]] &&
-               [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode2)" == "1" ]]; then
-                echo "true"
-                return
-            else
-                if [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode)" == "0" ]] &&
-                   [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode2)" == "0" ]]; then
-                    echo "false"
-                    return
-                else
-                    echo "custom"
-                    return
-                fi
-            fi
-        fi
-
-        # Handle Time Machine menu bar item
-        if [[ "$handler" == "Show_Time_Machine_Menu_Bar_Item" ]]; then
-            # Check if TimeMachine is in menuExtras array
-            tm_in_array="false"
-            if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "TimeMachine"; then
-                tm_in_array="true"
-            fi
-            # Get visibility setting
-            tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" 2>/dev/null || echo "0")
-            # Check if both conditions are met for "active" state
-            if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
-                echo "true"
-                return
-            else
-                if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
-                    echo "false"
-                    return
-                else
-                    echo "custom"
-                    return
-                fi
-            fi
-        fi
-        # Handle VPN menu bar item
-        if [[ "$handler" == "Show_VPN_Menu_Bar_Item" ]]; then
-            # Check if VPN is in menuExtras array
-            tm_in_array="false"
-            if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "VPN"; then
-                tm_in_array="true"
-            fi
-            # Get visibility setting
-            tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" 2>/dev/null || echo "0")
-            # Check if both conditions are met for "active" state
-            if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
-                echo "true"
-                return
-            else
-                if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
-                    echo "false"
-                    return
-                else
-                    echo "custom"
-                    return
-                fi
-            fi
-        fi
-
-        if [[ "$handler" == "disable_Apple_Intelligence" ]]; then
-            # Handle Apple Intelligence - Check current state first
-            domain="com.apple.CloudSubscriptionFeatures.optIn"
-            
-            # Check if any keys are enabled (set to 1)
-            enabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 1;" | awk '{print $1}')
-            disabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 0;" | awk '{print $1}')
-            
-            if [[ -n "$enabled_keys" ]]; then
-                echo "true"
-                return
-            elif [[ -n "$disabled_keys" ]]; then
-                echo "false" 
-                return
-            else
-                echo "custom"
-                return
-            fi
-        fi 
-
-        if [[ "$handler" == "DisableSpotlightRelatedContent" ]]; then
-            # Get the raw output
-            value=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-
-            # Check if it contains "Custom.relatedContents"
-            if echo "$value" | grep -q "Custom.relatedContents"; then
-                echo "true"
-                return
-            else
-                echo "false" 
-                return
-            fi
-        fi
-
-        if [[ "$handler" == "DisableMouseKeys" ]]; then
-            # Read both related settings
-            local shortcut_val
-            local ignore_val
-            shortcut_val=$(defaults read com.apple.universalaccess useMouseKeysShortcutKeys 2>/dev/null || echo "")
-            ignore_val=$(defaults read com.apple.universalaccess mouseDriverIgnoreTrackpad 2>/dev/null || echo "")
-
-            # Normalize to lowercase strings
-            shortcut_val=$(echo "$shortcut_val" | tr '[:upper:]' '[:lower:]')
-            ignore_val=$(echo "$ignore_val" | tr '[:upper:]' '[:lower:]')
-
-            # Map numeric/YES/NO representations to booleans
-            if [[ "$shortcut_val" == "1" || "$shortcut_val" == "yes" ]]; then
-                shortcut_val="true"
-            elif [[ "$shortcut_val" == "0" || "$shortcut_val" == "no" ]]; then
-                shortcut_val="false"
-            fi
-
-            if [[ "$ignore_val" == "1" || "$ignore_val" == "yes" ]]; then
-                ignore_val="true"
-            elif [[ "$ignore_val" == "0" || "$ignore_val" == "no" ]]; then
-                ignore_val="false"
-            fi
-
-            # Both false  => preference is "active" (Mouse Keys disabled)
-            # Both true   => preference is "inactive" (Mouse Keys enabled)
-            # Mixed/other => "custom"
-            if [[ "$shortcut_val" == "false" && "$ignore_val" == "false" ]]; then
-                echo "true"
-                return
-            elif [[ "$shortcut_val" == "true" && "$ignore_val" == "true" ]]; then
-                echo "false"
-                return
-            else
-                echo "custom"
-                return
-            fi
-        fi
-
-        if [[ "$handler" == "ReduceSpotlightResultsInTahoe" ]]; then
-            spotlight_prefs=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-            
-            # Check if ALL the expected disabled items are present
-            if echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.calculator" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.iCal" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.AddressBook" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Dictionary" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.mail" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.MobileSMS" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Notes" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Photos" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.podcasts" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.reminders" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.Safari" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.shortcuts" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.tips" && \
-            echo "$spotlight_prefs" | grep -q "com.apple.VoiceMemos" && \
-            echo "$spotlight_prefs" | grep -q "System.documents" && \
-            echo "$spotlight_prefs" | grep -q "System.files" && \
-            echo "$spotlight_prefs" | grep -q "System.folders" && \
-            echo "$spotlight_prefs" | grep -q "System.iphoneApps" && \
-            echo "$spotlight_prefs" | grep -q "System.menuItems"; then
+                        #     local current_value=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" | sed 's/.*= "\(.*\)";/\1/' || echo "")
+                        #     local key_exists=$(defaults read "$domain" "$key" 2>/dev/null | grep "\"$item_key\"" || echo "")
+                            
+                        #     if [[ -n "$key_exists" ]]; then
+                        #         if [[ -n "$current_value" ]]; then
+                        #             value_parts+=("\"$item_key\" = \"$current_value\"")
+                        #         else
+                        #             value_parts+=("\"$item_key\" (exists)")
+                        #         fi
+                        #     fi
+                        # fi
+                    fi
+                    IFS=';'
+                done
+                IFS="$IFS_SAVE"
                 
-                # Now verify that System Settings and Apps are NOT disabled (not in the array)
-                if ! echo "$spotlight_prefs" | grep -q "com.apple.systempreferences" && \
-                ! echo "$spotlight_prefs" | grep -q "System.applications"; then
+                if [[ ${#value_parts[@]} -eq 0 ]]; then
+                    echo "Not set"
+                else
+                    # Join with " & " separator
+                    local IFS=" & "
+                    echo "${value_parts[*]}"
+                fi
+                return
+                ;;
+            Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click)
+                # Handle trackpad tap to right click
+                if  [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
+                    [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "1" ]] &&
+                    [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "1" ]] &&
+                    [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "1" ]] &&
+                    [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "2" ]] &&
+                    [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "1" ]]; then
                     echo "true"
                     return
                 else
+                    if  [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick)" == "0" ]] &&
+                        [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior)" == "0" ]] &&
+                        [[ "$(defaults -currentHost read NSGlobalDomain com.apple.trackpad.enableSecondaryClick)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.AppleMultitouchTrackpad TrackpadRightClick)" == "0" ]]; then
+                        echo "false"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            ExpandTextEditSavePanels)
+                # Handle ExpandTextEditSavePanels
+                if  [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode)" == "1" ]] &&
+                    [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode2)" == "1" ]]; then
+                    echo "true"
+                    return
+                else
+                    if  [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode)" == "0" ]] &&
+                        [[ "$(defaults read com.apple.TextEdit NSNavPanelExpandedStateForSaveMode2)" == "0" ]]; then
+                        echo "false"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            Show_Time_Machine_Menu_Bar_Item)
+                # Handle Time Machine menu bar item
+                # Check if TimeMachine is in menuExtras array
+                tm_in_array="false"
+                if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "TimeMachine"; then
+                    tm_in_array="true"
+                fi
+                # Get visibility setting
+                tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" 2>/dev/null || echo "0")
+                # Check if both conditions are met for "active" state
+                if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
+                    echo "true"
+                    return
+                else
+                    if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
+                        echo "false"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            Show_VPN_Menu_Bar_Item)
+                # Handle VPN menu bar item
+                # Check if VPN is in menuExtras array
+                tm_in_array="false"
+                if /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "VPN"; then
+                    tm_in_array="true"
+                fi
+                # Get visibility setting
+                tm_visible=$(defaults read com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" 2>/dev/null || echo "0")
+                # Check if both conditions are met for "active" state
+                if [[ "$tm_visible" == "1" ]] && [[ "$tm_in_array" == "true" ]]; then
+                    echo "true"
+                    return
+                else
+                    if [[ "$tm_visible" == "0" ]] && [[ "$tm_in_array" == "false" ]]; then
+                        echo "false"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            disable_Apple_Intelligence)
+                # Handle Apple Intelligence - Check current state first
+                domain="com.apple.CloudSubscriptionFeatures.optIn"
+                
+                # Check if any keys are enabled (set to 1)
+                enabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 1;" | awk '{print $1}')
+                disabled_keys=$(defaults read "$domain" 2>/dev/null | grep -E "^\s+[0-9]+ = 0;" | awk '{print $1}')
+                
+                if [[ -n "$enabled_keys" ]]; then
+                    echo "true"
+                    return
+                elif [[ -n "$disabled_keys" ]]; then
+                    echo "false" 
+                    return
+                else
                     echo "custom"
                     return
                 fi
-            else
-                # Check if it's the fully inactive state (no app/system identifiers except maybe Custom.relatedContents)
-                if ! echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
-                ! echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
-                ! echo "$spotlight_prefs" | grep -q "System.files"; then
+                ;;
+            DisableSpotlightRelatedContent)
+                if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+                    # Get the raw output
+                    local value=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+
+                    # Check if it contains "Custom.relatedContents"
+                    if echo "$value" | grep -q "Custom.relatedContents"; then
+                        echo "true"
+                        return
+                    else
+                        echo "false" 
+                        return
+                    fi
+                else
+                    echo "N/A" 
+                    return
+                fi
+                ;;
+            DisableMouseKeys)
+                # Read both related settings
+                local shortcut_val
+                local ignore_val
+                shortcut_val=$(defaults read com.apple.universalaccess useMouseKeysShortcutKeys 2>/dev/null || echo "")
+                ignore_val=$(defaults read com.apple.universalaccess mouseDriverIgnoreTrackpad 2>/dev/null || echo "")
+
+                # Normalize to lowercase strings
+                shortcut_val=$(echo "$shortcut_val" | tr '[:upper:]' '[:lower:]')
+                ignore_val=$(echo "$ignore_val" | tr '[:upper:]' '[:lower:]')
+
+                # Map numeric/YES/NO representations to booleans
+                if [[ "$shortcut_val" == "1" || "$shortcut_val" == "yes" ]]; then
+                    shortcut_val="true"
+                elif [[ "$shortcut_val" == "0" || "$shortcut_val" == "no" ]]; then
+                    shortcut_val="false"
+                fi
+
+                if [[ "$ignore_val" == "1" || "$ignore_val" == "yes" ]]; then
+                    ignore_val="true"
+                elif [[ "$ignore_val" == "0" || "$ignore_val" == "no" ]]; then
+                    ignore_val="false"
+                fi
+
+                # Both false  => preference is "active" (Mouse Keys disabled)
+                # Both true   => preference is "inactive" (Mouse Keys enabled)
+                # Mixed/other => "custom"
+                if [[ "$shortcut_val" == "false" && "$ignore_val" == "false" ]]; then
+                    echo "true"
+                    return
+                elif [[ "$shortcut_val" == "true" && "$ignore_val" == "true" ]]; then
                     echo "false"
                     return
                 else
                     echo "custom"
                     return
                 fi
-            fi
-        fi
+                ;;
+            ReduceSpotlightResultsInTahoe)
+                local spotlight_prefs=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+                
+                # Check if ALL the expected disabled items are present
+                if echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.calculator" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.iCal" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.AddressBook" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Dictionary" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.mail" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.MobileSMS" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Notes" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Photos" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.podcasts" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.reminders" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.Safari" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.shortcuts" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.tips" && \
+                echo "$spotlight_prefs" | grep -q "com.apple.VoiceMemos" && \
+                echo "$spotlight_prefs" | grep -q "System.documents" && \
+                echo "$spotlight_prefs" | grep -q "System.files" && \
+                echo "$spotlight_prefs" | grep -q "System.folders" && \
+                echo "$spotlight_prefs" | grep -q "System.iphoneApps" && \
+                echo "$spotlight_prefs" | grep -q "System.menuItems"; then
+                    
+                    # Now verify that System Settings and Apps are NOT disabled (not in the array)
+                    if ! echo "$spotlight_prefs" | grep -q "com.apple.systempreferences" && \
+                    ! echo "$spotlight_prefs" | grep -q "System.applications"; then
+                        echo "true"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                else
+                    # Check if it's the fully inactive state (no app/system identifiers except maybe Custom.relatedContents)
+                    if ! echo "$spotlight_prefs" | grep -q "com.apple.AppStore" && \
+                    ! echo "$spotlight_prefs" | grep -q "com.apple.iBooksX" && \
+                    ! echo "$spotlight_prefs" | grep -q "System.files"; then
+                        echo "false"
+                        return
+                    else
+                        echo "custom"
+                        return
+                    fi
+                fi
+                ;;
+            ReduceSpotlightResultsInSequoia)
+                local ordered_items=$(defaults read com.apple.Spotlight orderedItems 2>/dev/null)
+                
+                # If key doesn't exist, return false (inactive/default)
+                if [[ -z "$ordered_items" ]]; then
+                    echo "false"
+                    return
+                fi
+                
+                # Check if APPLICATIONS and SYSTEM_PREFS are enabled, and all others are disabled
+                local apps_enabled=false
+                local system_prefs_enabled=false
+                local other_items_disabled=true
+                
+                # Helper function to check if an item is enabled
+                check_item_enabled() {
+                    local item_name="$1"
+                    local context=$(echo "$ordered_items" | grep -A 10 -B 2 "$item_name" | head -15)
+                    if echo "$context" | grep -qE "(enabled[[:space:]]*=[[:space:]]*(1|true|TRUE))"; then
+                        return 0
+                    fi
+                    return 1
+                }
+                
+                # Check APPLICATIONS
+                if check_item_enabled "APPLICATIONS"; then
+                    apps_enabled=true
+                fi
+                
+                # Check SYSTEM_PREFS
+                if check_item_enabled "SYSTEM_PREFS"; then
+                    system_prefs_enabled=true
+                fi
+                
+                # Check other items - they should all be disabled
+                local items_to_check=("MENU_EXPRESSION" "CONTACT" "MENU_CONVERSION" "MENU_DEFINITION" \
+                                    "DOCUMENTS" "EVENT_TODO" "DIRECTORIES" "FONTS" "IMAGES" "MESSAGES" \
+                                    "MOVIES" "MUSIC" "MENU_OTHER" "PDF" "PRESENTATIONS" \
+                                    "MENU_SPOTLIGHT_SUGGESTIONS" "SPREADSHEETS" "TIPS" "BOOKMARKS" "SOURCE")
+                
+                for item in "${items_to_check[@]}"; do
+                    if check_item_enabled "$item"; then
+                        other_items_disabled=false
+                        break
+                    fi
+                done
+                
+                # Return value based on state
+                if [[ "$apps_enabled" == true ]] && [[ "$system_prefs_enabled" == true ]] && [[ "$other_items_disabled" == true ]]; then
+                    echo "true"
+                    return
+                else
+                    echo "false"
+                    return
+                fi
+                ;;
+            NewArchiveUtilityDictIn26_4)
+                local result=$(defaults read $domain $key 2>/dev/null | awk '/Selection/ {print $3}' | tr -d '";')
+                if [[ "$result" == "MoveToTrash" ]]; then
+                    echo "active"
+                elif [[ "$result" == "UseSameFolder" ]]; then
+                    echo "inactive"
+                else
+                    if [[ -n "$result" ]]; then
+                        echo "$result"
+                    else
+                        echo "not set"
+                    fi
+                fi
+                return
+                ;;
+            ListViewColumns)
+                # Handle ListViewColumns settings - show summary of current column configurations
+                local plist_file="$HOME/Library/Preferences/com.apple.finder.plist"
+                local locations=(
+                    "iCloud:ExtendedListViewSettingsV2|:ICloudViewSettings"
+                    "iCloud:ListViewSettings|:ICloudViewSettings"
+                    "Standard:ExtendedListViewSettingsV2|:StandardViewSettings"
+                    "Standard:ListViewSettings|:StandardViewSettings"
+                    "Save Panels:ExtendedListViewSettingsV2|:FK_StandardViewSettings"
+                    "Save Panels:ListViewSettings|:FK_StandardViewSettings"
+                )
+                local summary=""
+                local match_count=0
+                local exist_count=0
+                
+                for location_info in "${locations[@]}"; do
+                    IFS='|' read -r location_name location_path <<< "$location_info"
+                    if check_list_view_columns_state "$plist_file" "$location_path"; then
+                        summary="${summary}${location_name}: ✅ configured\n"
+                        ((match_count++))
+                        ((exist_count++))
+                    else
+                        local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${location_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
+                        if [[ -n "$array_exists" ]] && [[ "$array_exists" != *"Doesn't Exist"* ]]; then
+                            summary="${summary}${location_name}: ⚠️  custom (not matching)\n"
+                            ((exist_count++))
+                        else
+                            summary="${summary}${location_name}: ❌ default\n"
+                        fi
+                    fi
+                done
+                
+                if [[ $match_count -eq 6 ]]; then
+                    echo -e "All locations configured correctly:\n${summary}"
+                elif [[ $exist_count -gt 0 ]]; then
+                    echo -e "Some locations customized:\n${summary}"
+                else
+                    echo -e "All locations at default:\n${summary}"
+                fi
+                return
+                ;;
+            ListView_calculateAllSizes)
+                # Handle ListView settings - read all relevant paths using PlistBuddy
+                local plist_file="$domain"
+                local locations=(
+                    "     iCloud (Extended)  |:ICloudViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    "     iCloud (ListView)  |:ICloudViewSettings:ListViewSettings:calculateAllSizes"
+                    "     iCloud (Dialogs)   |:FK_iCloudListViewSettingsV2:calculateAllSizes"
+                    "     Finder (Extended)  |:StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    "     Finder (ListView)  |:StandardViewSettings:ListViewSettings:calculateAllSizes"
+                    "     Finder (FKDefault) |:FK_DefaultListViewSettingsV2:calculateAllSizes"
+                    "     Finder (FKStandard)|:FK_StandardViewSettings:ListViewSettings:calculateAllSizes"
+                    "     Finder (FKStandard)|:FK_StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    "     Trash  (Extended)  |:TrashViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    "     Trash  (ListView)  |:TrashViewSettings:ListViewSettings:calculateAllSizes"
+                )
+                
+                local summary=""
+                local total=${#locations[@]}
+                local active_count=0
+                local inactive_count=0
+                local missing_count=0
+                
+                for location_info in "${locations[@]}"; do
+                    IFS='|' read -r location_name plist_path <<< "$location_info"
+                    local plist_output
+                    plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
+                    local plist_exit=$?
+                    
+                    if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
+                        summary="${summary}${location_name}: ❌ default (not set)\n"
+                        missing_count=$((missing_count + 1))
+                        continue
+                    fi
+                    
+                    local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
+                    if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
+                        norm_current="true"
+                    elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
+                        norm_current="false"
+                    fi
+                    
+                    if [[ "$norm_current" == "true" ]]; then
+                        summary="${summary}${location_name}: ✅ true\n"
+                        active_count=$((active_count + 1))
+                    elif [[ "$norm_current" == "false" ]]; then
+                        summary="${summary}${location_name}: ❌ false\n"
+                        inactive_count=$((inactive_count + 1))
+                    else
+                        summary="${summary}${location_name}: ⚠️  custom (${plist_output})\n"
+                    fi
+                done
+                
+                if [[ $active_count -eq $total ]]; then
+                    echo -e "All locations set to true:\n${summary}"
+                elif [[ $missing_count -eq $total ]]; then
+                    echo -e "All locations at default:\n${summary}"
+                else
+                    echo -e "Current values:\n${summary}"
+                fi
+                return
+                ;;
+            IconView_variousSettings)
+                # Handle IconView settings - read from plist using PlistBuddy
+                local plist_file="$domain"
+                local target_path="$key"
+                local setting_name="${target_path##*:}"
+                
+                local locations=(
+                    "          Finder Windows|:StandardViewSettings:IconViewSettings:${setting_name}"
+                    "          Save Dialogs  |:FK_StandardViewSettings:IconViewSettings:${setting_name}"
+                    "          iCloud Drive  |:ICloudViewSettings:IconViewSettings:${setting_name}"
+                )
+                
+                # Normalize reference values (can be bool, string, or numeric)
+                local norm_active=$(echo "$active_val" | tr '[:upper:]' '[:lower:]')
+                local norm_inactive=$(echo "$inactive_val" | tr '[:upper:]' '[:lower:]')
+                if [[ "$norm_active" == "1" || "$norm_active" == "yes" ]]; then
+                    norm_active="true"
+                elif [[ "$norm_active" == "0" || "$norm_active" == "no" ]]; then
+                    norm_active="false"
+                fi
+                if [[ "$norm_inactive" == "1" || "$norm_inactive" == "yes" ]]; then
+                    norm_inactive="true"
+                elif [[ "$norm_inactive" == "0" || "$norm_inactive" == "no" ]]; then
+                    norm_inactive="false"
+                fi
+                
+                local summary=""
+                local total=${#locations[@]}
+                local active_count=0
+                local inactive_count=0
+                local missing_count=0
+                
+                for location_info in "${locations[@]}"; do
+                    IFS='|' read -r location_name plist_path <<< "$location_info"
+                    local plist_output
+                    plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$plist_file" 2>&1)
+                    local plist_exit=$?
+                    
+                    if [[ $plist_exit -ne 0 ]] || [[ -z "$plist_output" ]] || [[ "$plist_output" == *"Doesn't Exist"* ]] || [[ "$plist_output" == *"Will Create"* ]]; then
+                        summary="${summary}${location_name}: ❌ default (not set)\n"
+                        missing_count=$((missing_count + 1))
+                        continue
+                    fi
+                    
+                    local norm_current=$(echo "$plist_output" | tr '[:upper:]' '[:lower:]')
+                    if [[ "$norm_current" == "1" || "$norm_current" == "yes" ]]; then
+                        norm_current="true"
+                    elif [[ "$norm_current" == "0" || "$norm_current" == "no" ]]; then
+                        norm_current="false"
+                    fi
+                    
+                    if [[ -n "$active_val" && "$norm_current" == "$norm_active" ]]; then
+                        # Matches the defined "active" value
+                        summary="${summary}${location_name}: ✅ active   (${plist_output})\n"
+                        active_count=$((active_count + 1))
+                    elif [[ -n "$inactive_val" && "$norm_current" == "$norm_inactive" ]]; then
+                        # Matches the defined "inactive" value
+                        summary="${summary}${location_name}: ❌ inactive (${plist_output})\n"
+                        inactive_count=$((inactive_count + 1))
+                    else
+                        # Anything else is treated as custom
+                        summary="${summary}${location_name}: ⚠️  custom   (${plist_output})\n"
+                    fi
+                done
+                
+                if [[ $missing_count -eq $total ]]; then
+                    echo -e "All locations at default:\n${summary}"
+                else
+                    echo -e "Current values:\n${summary}"
+                fi
+                return
+                ;;
+            Desktop_IconView_showItemInfo|Desktop_IconView_labelOnBottom|Desktop_IconView_arrangeBy|Desktop_IconView_textSize|Desktop_IconView_iconSize|Desktop_IconView_gridSpacing)
+                # Handle Desktop IconView settings - read from plist using PlistBuddy
+                local plist_path="$key"
+                # Read value and capture both stdout and exit code
+                local plist_output=$(/usr/libexec/PlistBuddy -c "Print $plist_path" "$domain" 2>&1)
+                local plist_exit=$?
+                local current_val=""
+                
+                # Check if command succeeded and output is valid
+                if [[ $plist_exit -eq 0 ]] && [[ -n "$plist_output" ]] && [[ "$plist_output" != *"Doesn't Exist"* ]] && [[ "$plist_output" != *"Will Create"* ]]; then
+                    current_val="$plist_output"
+                else
+                    current_val="not set"
+                fi
+                echo "$current_val"
+                return
+                ;;
+            key_equivalents|defaults_dict|defaults_array|plistbuddy)
+                # Complex payload types: don't try to print giant dicts/arrays; indicate custom
+                echo "custom"
+                return
+                ;;
+            UseBrightBoldInTerminal)
+                # # Check a specific Window Setting 
+                # # value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':Basic:UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
+                
+                # # Check if used for ANY Window Setting
+                # value=$(defaults read com.apple.Terminal | grep -q "UseBrightBold = 1" && echo "true" || echo "false")
 
-        if [[ "$handler" == "ReduceSpotlightResultsInSequoia" ]]; then
-            local ordered_items=$(defaults read com.apple.Spotlight orderedItems 2>/dev/null)
-            
-            # If key doesn't exist, return false (inactive/default)
-            if [[ -z "$ordered_items" ]]; then
-                echo "false"
+                # if [[ "$value" == "false" ]]; then
+                #     echo "false"
+                # elif [[ "$value" == "true" ]] ; then
+                #     echo "true"
+                # else
+                #     echo "not set"
+                # fi
+                # return
+                
+                default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
+                startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
+
+                # Check active profiles only; prefer Default Window Settings
+                for profile in "$default_profile" "$startup_profile"; do
+                    [[ -z "$profile" ]] && continue
+                    value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
+                    case "$value" in
+                        true)  echo "true";  return ;;
+                        false) echo "false"; return ;;
+                    esac
+                done
+                echo "not set"
                 return
-            fi
-            
-            # Check if APPLICATIONS and SYSTEM_PREFS are enabled, and all others are disabled
-            local apps_enabled=false
-            local system_prefs_enabled=false
-            local other_items_disabled=true
-            
-            # Helper function to check if an item is enabled
-            check_item_enabled() {
-                local item_name="$1"
-                local context=$(echo "$ordered_items" | grep -A 10 -B 2 "$item_name" | head -15)
-                if echo "$context" | grep -qE "(enabled[[:space:]]*=[[:space:]]*(1|true|TRUE))"; then
-                    return 0
-                fi
-                return 1
-            }
-            
-            # Check APPLICATIONS
-            if check_item_enabled "APPLICATIONS"; then
-                apps_enabled=true
-            fi
-            
-            # Check SYSTEM_PREFS
-            if check_item_enabled "SYSTEM_PREFS"; then
-                system_prefs_enabled=true
-            fi
-            
-            # Check other items - they should all be disabled
-            local items_to_check=("MENU_EXPRESSION" "CONTACT" "MENU_CONVERSION" "MENU_DEFINITION" \
-                                  "DOCUMENTS" "EVENT_TODO" "DIRECTORIES" "FONTS" "IMAGES" "MESSAGES" \
-                                  "MOVIES" "MUSIC" "MENU_OTHER" "PDF" "PRESENTATIONS" \
-                                  "MENU_SPOTLIGHT_SUGGESTIONS" "SPREADSHEETS" "TIPS" "BOOKMARKS" "SOURCE")
-            
-            for item in "${items_to_check[@]}"; do
-                if check_item_enabled "$item"; then
-                    other_items_disabled=false
-                    break
-                fi
-            done
-            
-            # Return value based on state
-            if [[ "$apps_enabled" == true ]] && [[ "$system_prefs_enabled" == true ]] && [[ "$other_items_disabled" == true ]]; then
-                echo "true"
+                ;;
+            sudo)
+                echo "sudo command - cannot read current value"
                 return
+                ;;
+            chflags)
+                if [[ "$key" == "ShowLibrary" ]]; then
+                    # if [[ -d ~/Library ]] && [[ "$(ls -la ~/ | grep Library | grep hidden)" ]]; then
+                    if [[ -d ~/Library ]] && [[ $(ls -lOd ~/Library 2>/dev/null | awk '{print $5}') == *"hidden"* ]]; then
+                        echo "hidden"
+                        return
+                    else
+                        echo "visible"
+                        return
+                    fi
+                fi
+                echo "unknown"
+                return
+                ;;
+            launchctl)
+                echo "launchctl command - cannot read current value"
+                return
+                ;;
+        esac
+        
+        # Handle special cases that return large amounts of data
+        if [[ "$domain" == "com.apple.dock" && "$key" == "persistent-apps" ]]; then
+            # Count the number of apps currently in the Dock (excluding Finder)
+            local app_count=$(defaults read "$domain" "$key" 2>/dev/null \
+                | grep "file-label" 2>/dev/null \
+                | wc -l 2>/dev/null \
+                | xargs || echo "0")
+
+            app_count=${app_count:-0}    # Ensure it's not empty
+            local total_app_count=$((app_count + 1))    # Add 1 for the Finder Dock icon
+
+            # Output updated count including Finder
+            if [[ "$total_app_count" -gt 1 ]]; then
+                echo "$total_app_count apps currently in Dock"
             else
-                echo "false"
-                return
+                echo "All apps removed (except for Finder)"
             fi
-        fi
-
-        # if [[ "$handler" == "UseBrightBoldInTerminal" ]]; then
-        #     # Check a specific Window Setting 
-        #     # value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':Basic:UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
-            
-        #     # Check if used for ANY Window Setting
-        #     value=$(defaults read com.apple.Terminal | grep -q "UseBrightBold = 1" && echo "true" || echo "false")
-
-        #     if [[ "$value" == "false" ]]; then
-        #         echo "false"
-        #     elif [[ "$value" == "true" ]] ; then
-        #         echo "true"
-        #     else
-        #         echo "not set"
-        #     fi
-        #     return
-        # fi
-
-        if [[ "$handler" == "UseBrightBoldInTerminal" ]]; then
-            default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
-            startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
-
-            # Check active profiles only; prefer Default Window Settings
-            for profile in "$default_profile" "$startup_profile"; do
-                [[ -z "$profile" ]] && continue
-                value=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
-                case "$value" in
-                    true)  echo "true";  return ;;
-                    false) echo "false"; return ;;
-                esac
-            done
-            echo "not set"
             return
         fi
-
-        # Handle currentHost handler
-        if [[ "$handler" == *"-currentHost"* ]]; then
+        
+        if [[ "$handler" == "-currentHost" ]]; then
             local current_value=$(defaults -currentHost read "$domain" "$key" 2>/dev/null || echo "not set")
             # Limit output length for very long values
             if [[ ${#current_value} -gt 50 ]]; then
@@ -8450,32 +9269,14 @@ function macos_preferences() {
                 echo "$current_value"
             fi
             return
-        fi
-        
-        # Handle special cases that return large amounts of data
-        if [[ "$domain" == "com.apple.dock" && "$key" == "persistent-apps" ]]; then
-            local app_count=$(defaults read "$domain" "$key" 2>/dev/null | grep "CFBundleIdentifier" 2>/dev/null | wc -l 2>/dev/null || echo "0")
-            app_count=${app_count:-0}  # Ensure it's not empty
-            if [[ "$app_count" -gt 0 ]]; then
-                echo "$app_count app(s) in Dock"
-            else
-                echo "no apps in Dock"
-            fi
-            return
-        fi
-        
-        if [[ "$domain" == "launchctl" ]]; then
-            echo "launchctl command - cannot read current value"
-            return
-        fi
-        
-        local current_value=$(defaults read "$domain" "$key" 2>/dev/null || echo "not set")
-        
-        # Limit output length for very long values
-        if [[ ${#current_value} -gt 50 ]]; then
-            echo "${current_value:0:47}..."
         else
-            echo "$current_value"
+            local current_value=$(defaults read "$domain" "$key" 2>/dev/null || echo "not set")
+            # Limit output length for very long values
+            if [[ ${#current_value} -gt 50 ]]; then
+                echo "${current_value:0:47}..."
+            else
+                echo "$current_value"
+            fi
         fi
     }
     # Helper: write defaults with correct handler based on value (bash 3.2 compatible)
@@ -8524,241 +9325,245 @@ function macos_preferences() {
         # Fallback: string
         defaults $host_flag write "$domain" "$key" -string "$value"
     }
-    # Helper function to find column index by identifier in ExtendedListViewSettingsV2 array
-    find_column_index_by_identifier() {
-        local plist_file="$1"
-        local base_path="$2"
-        local identifier="$3"
-        
-        # Try to find the column by checking each index (0-20 should be enough)
-        local idx=0
-        while [ $idx -lt 20 ]; do
-            local found_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:${idx}:identifier" "$plist_file" 2>/dev/null)
-            if [[ -z "$found_id" ]] || [[ "$found_id" == *"Doesn't Exist"* ]]; then
-                break
-            fi
-            if [[ "$found_id" == "$identifier" ]]; then
-                echo "$idx"
-                return 0
-            fi
-            idx=$((idx + 1))
-        done
-        echo "-1"
-        return 1
-    }
-    # Helper function to update or add a column in ExtendedListViewSettingsV2 array format
-    update_array_column() {
-        local plist_file="$1"
-        local base_path="$2"
-        local identifier="$3"
-        local ascending="$4"
-        local width="$5"
-        local visible="$6"
-        local desired_index="$7"  # Desired position (0-5 for our 6 columns)
-        
-        # Find if column already exists
-        local existing_idx=$(find_column_index_by_identifier "$plist_file" "$base_path" "$identifier")
-        
-        if [[ "$existing_idx" != "-1" ]]; then
-            # Column exists, update it
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ExtendedListViewSettingsV2:columns:${existing_idx}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ExtendedListViewSettingsV2:columns:${existing_idx}:width integer $width" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ExtendedListViewSettingsV2:columns:${existing_idx}:visible bool $visible" "$plist_file" 2>/dev/null || true
-        else
-            # Column doesn't exist, need to add it
-            # First, ensure the columns array exists
-            local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
-            if [[ -z "$array_exists" ]] || [[ "$array_exists" == *"Doesn't Exist"* ]]; then
-                /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns array" "$plist_file" 2>/dev/null || true
-            fi
+    # only used to easily collapse all unused code below
+    if true; then
+        :
+        # # Helper function to find column index by identifier in ExtendedListViewSettingsV2 array
+        # find_column_index_by_identifier() {
+        #     local plist_file="$1"
+        #     local base_path="$2"
+        #     local identifier="$3"
             
-            # Find the current array size
-            local array_size=0
-            while [ $array_size -lt 20 ]; do
-                local test_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:${array_size}:identifier" "$plist_file" 2>/dev/null)
-                if [[ -z "$test_id" ]] || [[ "$test_id" == *"Doesn't Exist"* ]]; then
-                    break
-                fi
-                array_size=$((array_size + 1))
-            done
+        #     # Try to find the column by checking each index (0-20 should be enough)
+        #     local idx=0
+        #     while [ $idx -lt 20 ]; do
+        #         local found_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:${idx}:identifier" "$plist_file" 2>/dev/null)
+        #         if [[ -z "$found_id" ]] || [[ "$found_id" == *"Doesn't Exist"* ]]; then
+        #             break
+        #         fi
+        #         if [[ "$found_id" == "$identifier" ]]; then
+        #             echo "$idx"
+        #             return 0
+        #         fi
+        #         idx=$((idx + 1))
+        #     done
+        #     echo "-1"
+        #     return 1
+        # }
+        # # Helper function to update or add a column in ExtendedListViewSettingsV2 array format
+        # update_array_column() {
+        #     local plist_file="$1"
+        #     local base_path="$2"
+        #     local identifier="$3"
+        #     local ascending="$4"
+        #     local width="$5"
+        #     local visible="$6"
+        #     local desired_index="$7"  # Desired position (0-5 for our 6 columns)
             
-            # Insert at desired_index, but if array is smaller, append
-            local insert_idx=$desired_index
-            if [[ $insert_idx -gt $array_size ]]; then
-                insert_idx=$array_size
-            fi
+        #     # Find if column already exists
+        #     local existing_idx=$(find_column_index_by_identifier "$plist_file" "$base_path" "$identifier")
             
-            # For now, just append to end (safer than inserting in middle)
-            # PlistBuddy doesn't easily support inserting at specific index
-            insert_idx=$array_size
+        #     if [[ "$existing_idx" != "-1" ]]; then
+        #         # Column exists, update it
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ExtendedListViewSettingsV2:columns:${existing_idx}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ExtendedListViewSettingsV2:columns:${existing_idx}:width integer $width" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ExtendedListViewSettingsV2:columns:${existing_idx}:visible bool $visible" "$plist_file" 2>/dev/null || true
+        #     else
+        #         # Column doesn't exist, need to add it
+        #         # First, ensure the columns array exists
+        #         local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
+        #         if [[ -z "$array_exists" ]] || [[ "$array_exists" == *"Doesn't Exist"* ]]; then
+        #             /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns array" "$plist_file" 2>/dev/null || true
+        #         fi
+                
+        #         # Find the current array size
+        #         local array_size=0
+        #         while [ $array_size -lt 20 ]; do
+        #             local test_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:${array_size}:identifier" "$plist_file" 2>/dev/null)
+        #             if [[ -z "$test_id" ]] || [[ "$test_id" == *"Doesn't Exist"* ]]; then
+        #                 break
+        #             fi
+        #             array_size=$((array_size + 1))
+        #         done
+                
+        #         # Insert at desired_index, but if array is smaller, append
+        #         local insert_idx=$desired_index
+        #         if [[ $insert_idx -gt $array_size ]]; then
+        #             insert_idx=$array_size
+        #         fi
+                
+        #         # For now, just append to end (safer than inserting in middle)
+        #         # PlistBuddy doesn't easily support inserting at specific index
+        #         insert_idx=$array_size
+                
+        #         # Add the column dictionary
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:identifier string $identifier" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:width integer $width" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:visible bool $visible" "$plist_file" 2>/dev/null || true
+        #     fi
+        # }
+        # # Helper function to update or add a column in ListViewSettings dictionary format
+        # update_dict_column() {
+        #     local plist_file="$1"
+        #     local base_path="$2"
+        #     local identifier="$3"
+        #     local index="$4"
+        #     local ascending="$5"
+        #     local width="$6"
+        #     local visible="$7"
             
-            # Add the column dictionary
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:identifier string $identifier" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:width integer $width" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ExtendedListViewSettingsV2:columns:${insert_idx}:visible bool $visible" "$plist_file" 2>/dev/null || true
-        fi
-    }
-    # Helper function to update or add a column in ListViewSettings dictionary format
-    update_dict_column() {
-        local plist_file="$1"
-        local base_path="$2"
-        local identifier="$3"
-        local index="$4"
-        local ascending="$5"
-        local width="$6"
-        local visible="$7"
-        
-        # Check if columns dict exists
-        local dict_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ListViewSettings:columns" "$plist_file" 2>/dev/null | head -1)
-        if [[ -z "$dict_exists" ]] || [[ "$dict_exists" == *"Doesn't Exist"* ]]; then
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns dict" "$plist_file" 2>/dev/null || true
-        fi
-        
-        # Check if this column exists
-        local col_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ListViewSettings:columns:${identifier}:identifier" "$plist_file" 2>/dev/null)
-        
-        if [[ -n "$col_exists" ]] && [[ "$col_exists" != *"Doesn't Exist"* ]]; then
-            # Column exists, update it
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:index integer $index" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:width integer $width" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:visible bool $visible" "$plist_file" 2>/dev/null || true
-        else
-            # Column doesn't exist, add it
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:identifier string $identifier" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:index integer $index" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:width integer $width" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:visible bool $visible" "$plist_file" 2>/dev/null || true
-        fi
-    }
-    # Helper function to set List View columns configuration
-    # Preserves existing columns and only updates the 6 target columns
-    set_list_view_columns() {
-        local plist_file="$1"
-        local base_path="$2"  # e.g., ":ICloudViewSettings" or ":StandardViewSettings"
-        local action="$3"      # "set" or "delete"
-        
-        if [[ "$action" == "delete" ]]; then
-            # Delete columns from both formats to restore defaults
-            /usr/libexec/PlistBuddy -c "Delete ${base_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null || true
-            /usr/libexec/PlistBuddy -c "Delete ${base_path}:ListViewSettings:columns" "$plist_file" 2>/dev/null || true
-            return
-        fi
-        
-        # Update ExtendedListViewSettingsV2:columns (array format)
-        # name: index=0, ascending=true, width=456, visible=true
-        update_array_column "$plist_file" "$base_path" "name" "true" "456" "true" "0"
-        
-        # dateAdded: index=1, ascending=false, width=75, visible=true
-        update_array_column "$plist_file" "$base_path" "dateAdded" "false" "75" "true" "1"
-        
-        # dateModified: index=2, ascending=false, width=75, visible=true
-        update_array_column "$plist_file" "$base_path" "dateModified" "false" "75" "true" "2"
-        
-        # size: index=3, ascending=false, width=75, visible=true
-        update_array_column "$plist_file" "$base_path" "size" "false" "75" "true" "3"
-        
-        # version: index=4, ascending=true, width=75, visible=true
-        update_array_column "$plist_file" "$base_path" "version" "true" "75" "true" "4"
-        
-        # kind: index=5, ascending=true, width=143, visible=true
-        update_array_column "$plist_file" "$base_path" "kind" "true" "143" "true" "5"
-        
-        # Update ListViewSettings:columns (dictionary format)
-        # name: index=0, ascending=true, width=456, visible=true
-        update_dict_column "$plist_file" "$base_path" "name" "0" "true" "456" "true"
-        
-        # dateAdded: index=1, ascending=false, width=75, visible=true
-        update_dict_column "$plist_file" "$base_path" "dateAdded" "1" "false" "75" "true"
-        
-        # dateModified: index=2, ascending=false, width=75, visible=true
-        update_dict_column "$plist_file" "$base_path" "dateModified" "2" "false" "75" "true"
-        
-        # size: index=3, ascending=false, width=75, visible=true
-        update_dict_column "$plist_file" "$base_path" "size" "3" "false" "75" "true"
-        
-        # version: index=4, ascending=true, width=75, visible=true
-        update_dict_column "$plist_file" "$base_path" "version" "4" "true" "75" "true"
-        
-        # kind: index=5, ascending=true, width=143, visible=true
-        update_dict_column "$plist_file" "$base_path" "kind" "5" "true" "143" "true"
-    }
-    # Helper function to check if List View columns match desired configuration
-    check_list_view_columns_state() {
-        local plist_file="$1"
-        local base_path="$2"  # e.g., ":ICloudViewSettings" or ":StandardViewSettings"
-        
-        # Check ExtendedListViewSettingsV2 format (array)
-        local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
-        if [[ -z "$array_exists" ]] || [[ "$array_exists" == *"Doesn't Exist"* ]]; then
-            return 1  # Columns don't exist
-        fi
-        
-        # Check if we have at least 6 columns by trying to access index 5
-        local test_column=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:identifier" "$plist_file" 2>/dev/null)
-        if [[ -z "$test_column" ]] || [[ "$test_column" == *"Doesn't Exist"* ]]; then
-            return 1  # Not enough columns (need at least 6, index 0-5)
-        fi
-        
-        # Verify each column matches desired configuration
-        # name: index=0, ascending=true, width=456, visible=true
-        local name_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:identifier" "$plist_file" 2>/dev/null)
-        local name_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:ascending" "$plist_file" 2>/dev/null)
-        local name_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:width" "$plist_file" 2>/dev/null)
-        local name_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:visible" "$plist_file" 2>/dev/null)
-        if [[ "$name_id" != "name" ]] || [[ "$name_asc" != "true" ]] || [[ "$name_wid" != "456" ]] || [[ "$name_vis" != "true" ]]; then
-            return 1
-        fi
-        
-        # dateAdded: index=1, ascending=false, width=75, visible=true
-        local dateadd_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:identifier" "$plist_file" 2>/dev/null)
-        local dateadd_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:ascending" "$plist_file" 2>/dev/null)
-        local dateadd_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:width" "$plist_file" 2>/dev/null)
-        local dateadd_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:visible" "$plist_file" 2>/dev/null)
-        if [[ "$dateadd_id" != "dateAdded" ]] || [[ "$dateadd_asc" != "false" ]] || [[ "$dateadd_wid" != "75" ]] || [[ "$dateadd_vis" != "true" ]]; then
-            return 1
-        fi
-        
-        # dateModified: index=2, ascending=false, width=75, visible=true
-        local datemod_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:identifier" "$plist_file" 2>/dev/null)
-        local datemod_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:ascending" "$plist_file" 2>/dev/null)
-        local datemod_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:width" "$plist_file" 2>/dev/null)
-        local datemod_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:visible" "$plist_file" 2>/dev/null)
-        if [[ "$datemod_id" != "dateModified" ]] || [[ "$datemod_asc" != "false" ]] || [[ "$datemod_wid" != "75" ]] || [[ "$datemod_vis" != "true" ]]; then
-            return 1
-        fi
-        
-        # size: index=3, ascending=false, width=75, visible=true
-        local size_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:identifier" "$plist_file" 2>/dev/null)
-        local size_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:ascending" "$plist_file" 2>/dev/null)
-        local size_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:width" "$plist_file" 2>/dev/null)
-        local size_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:visible" "$plist_file" 2>/dev/null)
-        if [[ "$size_id" != "size" ]] || [[ "$size_asc" != "false" ]] || [[ "$size_wid" != "75" ]] || [[ "$size_vis" != "true" ]]; then
-            return 1
-        fi
-        
-        # version: index=4, ascending=true, width=75, visible=true
-        local version_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:identifier" "$plist_file" 2>/dev/null)
-        local version_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:ascending" "$plist_file" 2>/dev/null)
-        local version_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:width" "$plist_file" 2>/dev/null)
-        local version_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:visible" "$plist_file" 2>/dev/null)
-        if [[ "$version_id" != "version" ]] || [[ "$version_asc" != "true" ]] || [[ "$version_wid" != "75" ]] || [[ "$version_vis" != "true" ]]; then
-            return 1
-        fi
-        
-        # kind: index=5, ascending=true, width=143, visible=true
-        local kind_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:identifier" "$plist_file" 2>/dev/null)
-        local kind_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:ascending" "$plist_file" 2>/dev/null)
-        local kind_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:width" "$plist_file" 2>/dev/null)
-        local kind_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:visible" "$plist_file" 2>/dev/null)
-        if [[ "$kind_id" != "kind" ]] || [[ "$kind_asc" != "true" ]] || [[ "$kind_wid" != "143" ]] || [[ "$kind_vis" != "true" ]]; then
-            return 1
-        fi
-        
-        return 0  # All columns match
-    }
+        #     # Check if columns dict exists
+        #     local dict_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ListViewSettings:columns" "$plist_file" 2>/dev/null | head -1)
+        #     if [[ -z "$dict_exists" ]] || [[ "$dict_exists" == *"Doesn't Exist"* ]]; then
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns dict" "$plist_file" 2>/dev/null || true
+        #     fi
+            
+        #     # Check if this column exists
+        #     local col_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ListViewSettings:columns:${identifier}:identifier" "$plist_file" 2>/dev/null)
+            
+        #     if [[ -n "$col_exists" ]] && [[ "$col_exists" != *"Doesn't Exist"* ]]; then
+        #         # Column exists, update it
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:index integer $index" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:width integer $width" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Set ${base_path}:ListViewSettings:columns:${identifier}:visible bool $visible" "$plist_file" 2>/dev/null || true
+        #     else
+        #         # Column doesn't exist, add it
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:identifier string $identifier" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:index integer $index" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:ascending bool $ascending" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:width integer $width" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Add ${base_path}:ListViewSettings:columns:${identifier}:visible bool $visible" "$plist_file" 2>/dev/null || true
+        #     fi
+        # }
+        # # Helper function to set List View columns configuration
+        # # Preserves existing columns and only updates the 6 target columns
+        # set_list_view_columns() {
+        #     local plist_file="$1"
+        #     local base_path="$2"  # e.g., ":ICloudViewSettings" or ":StandardViewSettings"
+        #     local action="$3"      # "set" or "delete"
+            
+        #     if [[ "$action" == "delete" ]]; then
+        #         # Delete columns from both formats to restore defaults
+        #         /usr/libexec/PlistBuddy -c "Delete ${base_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null || true
+        #         /usr/libexec/PlistBuddy -c "Delete ${base_path}:ListViewSettings:columns" "$plist_file" 2>/dev/null || true
+        #         return
+        #     fi
+            
+        #     # Update ExtendedListViewSettingsV2:columns (array format)
+        #     # name: index=0, ascending=true, width=456, visible=true
+        #     update_array_column "$plist_file" "$base_path" "name" "true" "456" "true" "0"
+            
+        #     # dateAdded: index=1, ascending=false, width=75, visible=true
+        #     update_array_column "$plist_file" "$base_path" "dateAdded" "false" "75" "true" "1"
+            
+        #     # dateModified: index=2, ascending=false, width=75, visible=true
+        #     update_array_column "$plist_file" "$base_path" "dateModified" "false" "75" "true" "2"
+            
+        #     # size: index=3, ascending=false, width=75, visible=true
+        #     update_array_column "$plist_file" "$base_path" "size" "false" "75" "true" "3"
+            
+        #     # version: index=4, ascending=true, width=75, visible=true
+        #     update_array_column "$plist_file" "$base_path" "version" "true" "75" "true" "4"
+            
+        #     # kind: index=5, ascending=true, width=143, visible=true
+        #     update_array_column "$plist_file" "$base_path" "kind" "true" "143" "true" "5"
+            
+        #     # Update ListViewSettings:columns (dictionary format)
+        #     # name: index=0, ascending=true, width=456, visible=true
+        #     update_dict_column "$plist_file" "$base_path" "name" "0" "true" "456" "true"
+            
+        #     # dateAdded: index=1, ascending=false, width=75, visible=true
+        #     update_dict_column "$plist_file" "$base_path" "dateAdded" "1" "false" "75" "true"
+            
+        #     # dateModified: index=2, ascending=false, width=75, visible=true
+        #     update_dict_column "$plist_file" "$base_path" "dateModified" "2" "false" "75" "true"
+            
+        #     # size: index=3, ascending=false, width=75, visible=true
+        #     update_dict_column "$plist_file" "$base_path" "size" "3" "false" "75" "true"
+            
+        #     # version: index=4, ascending=true, width=75, visible=true
+        #     update_dict_column "$plist_file" "$base_path" "version" "4" "true" "75" "true"
+            
+        #     # kind: index=5, ascending=true, width=143, visible=true
+        #     update_dict_column "$plist_file" "$base_path" "kind" "5" "true" "143" "true"
+        # }
+        # # Helper function to check if List View columns match desired configuration
+        # check_list_view_columns_state() {
+        #     local plist_file="$1"
+        #     local base_path="$2"  # e.g., ":ICloudViewSettings" or ":StandardViewSettings"
+            
+        #     # Check ExtendedListViewSettingsV2 format (array)
+        #     local array_exists=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns" "$plist_file" 2>/dev/null | head -1)
+        #     if [[ -z "$array_exists" ]] || [[ "$array_exists" == *"Doesn't Exist"* ]]; then
+        #         return 1  # Columns don't exist
+        #     fi
+            
+        #     # Check if we have at least 6 columns by trying to access index 5
+        #     local test_column=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:identifier" "$plist_file" 2>/dev/null)
+        #     if [[ -z "$test_column" ]] || [[ "$test_column" == *"Doesn't Exist"* ]]; then
+        #         return 1  # Not enough columns (need at least 6, index 0-5)
+        #     fi
+            
+        #     # Verify each column matches desired configuration
+        #     # name: index=0, ascending=true, width=456, visible=true
+        #     local name_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:identifier" "$plist_file" 2>/dev/null)
+        #     local name_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:ascending" "$plist_file" 2>/dev/null)
+        #     local name_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:width" "$plist_file" 2>/dev/null)
+        #     local name_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:0:visible" "$plist_file" 2>/dev/null)
+        #     if [[ "$name_id" != "name" ]] || [[ "$name_asc" != "true" ]] || [[ "$name_wid" != "456" ]] || [[ "$name_vis" != "true" ]]; then
+        #         return 1
+        #     fi
+            
+        #     # dateAdded: index=1, ascending=false, width=75, visible=true
+        #     local dateadd_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:identifier" "$plist_file" 2>/dev/null)
+        #     local dateadd_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:ascending" "$plist_file" 2>/dev/null)
+        #     local dateadd_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:width" "$plist_file" 2>/dev/null)
+        #     local dateadd_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:1:visible" "$plist_file" 2>/dev/null)
+        #     if [[ "$dateadd_id" != "dateAdded" ]] || [[ "$dateadd_asc" != "false" ]] || [[ "$dateadd_wid" != "75" ]] || [[ "$dateadd_vis" != "true" ]]; then
+        #         return 1
+        #     fi
+            
+        #     # dateModified: index=2, ascending=false, width=75, visible=true
+        #     local datemod_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:identifier" "$plist_file" 2>/dev/null)
+        #     local datemod_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:ascending" "$plist_file" 2>/dev/null)
+        #     local datemod_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:width" "$plist_file" 2>/dev/null)
+        #     local datemod_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:2:visible" "$plist_file" 2>/dev/null)
+        #     if [[ "$datemod_id" != "dateModified" ]] || [[ "$datemod_asc" != "false" ]] || [[ "$datemod_wid" != "75" ]] || [[ "$datemod_vis" != "true" ]]; then
+        #         return 1
+        #     fi
+            
+        #     # size: index=3, ascending=false, width=75, visible=true
+        #     local size_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:identifier" "$plist_file" 2>/dev/null)
+        #     local size_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:ascending" "$plist_file" 2>/dev/null)
+        #     local size_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:width" "$plist_file" 2>/dev/null)
+        #     local size_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:3:visible" "$plist_file" 2>/dev/null)
+        #     if [[ "$size_id" != "size" ]] || [[ "$size_asc" != "false" ]] || [[ "$size_wid" != "75" ]] || [[ "$size_vis" != "true" ]]; then
+        #         return 1
+        #     fi
+            
+        #     # version: index=4, ascending=true, width=75, visible=true
+        #     local version_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:identifier" "$plist_file" 2>/dev/null)
+        #     local version_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:ascending" "$plist_file" 2>/dev/null)
+        #     local version_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:width" "$plist_file" 2>/dev/null)
+        #     local version_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:4:visible" "$plist_file" 2>/dev/null)
+        #     if [[ "$version_id" != "version" ]] || [[ "$version_asc" != "true" ]] || [[ "$version_wid" != "75" ]] || [[ "$version_vis" != "true" ]]; then
+        #         return 1
+        #     fi
+            
+        #     # kind: index=5, ascending=true, width=143, visible=true
+        #     local kind_id=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:identifier" "$plist_file" 2>/dev/null)
+        #     local kind_asc=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:ascending" "$plist_file" 2>/dev/null)
+        #     local kind_wid=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:width" "$plist_file" 2>/dev/null)
+        #     local kind_vis=$(/usr/libexec/PlistBuddy -c "Print ${base_path}:ExtendedListViewSettingsV2:columns:5:visible" "$plist_file" 2>/dev/null)
+        #     if [[ "$kind_id" != "kind" ]] || [[ "$kind_asc" != "true" ]] || [[ "$kind_wid" != "143" ]] || [[ "$kind_vis" != "true" ]]; then
+        #         return 1
+        #     fi
+            
+        #     return 0  # All columns match
+        # }
+    fi
     # Helper function to apply preference change
     apply_preference_change() {
         local domain="$1"
@@ -8768,15 +9573,38 @@ function macos_preferences() {
         local action="$5"
         
         echo
+        case "$domain" in
+            com.apple.Safari|com.apple.universalaccess|com.apple.archiveutility|com.apple.MobileSMS)
+                if [[ "$full_disk_access" == "false" ]]; then
+                    # exit early
+                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
+                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission."
+                    read -r -t 4 -n 1
+                    echo
+                    return 1
+                fi
+            ;;
+        esac
         # echo "${YE}Applying $action for $key...${NC}"
         echo "${YE}Applying changes...${NC}"  
 
         # Handles handler cases
         case "$handler" in
+            "delete")
+                # For delete handler, we need to handle active/inactive differently
+                # Active/inactive should use defaults write, only reset should use defaults delete
+                if [[ "$action" == "active" || "$action" == "inactive" ]]; then
+                    # Use the provided value for active/inactive with proper typing
+                    write_defaults_typed "$domain" "$key" "$value" "$handler"
+                else
+                    # Use delete for reset to default
+                    defaults delete "$domain" "$key" 2>/dev/null || true
+                fi
+                read -r -t 1 -n 1
+                ;;
             *"-currentHost"*)
                 # Handle currentHost handlers - write with proper typing for active/inactive
-                if [[ "$key" == "Spotlight" ]]; then
-                    # If 
+                if [[ "$domain" == "com.apple.Spotlight" ]]; then
                     if [[ "$action" == "active" ]]; then
                         defaults -currentHost write com.apple.Spotlight MenuItemHidden -bool false 2>/dev/null || true
                         defaults write com.apple.Spotlight "NSStatusItem VisibleCC Item-0" -bool true 2>/dev/null || true
@@ -8790,37 +9618,17 @@ function macos_preferences() {
                 #     elif [[ "$action" == "inactive" ]]; then
                 #         defaults -currentHost write com.apple.Siri StatusMenuVisible -bool false 2>/dev/null || true                        
                 #     fi
-                fi
-                write_defaults_typed "$domain" "$key" "$value" "$handler"
-                ;;
-            "delete")
-                # For delete handler, we need to handle active/inactive differently
-                # Active/inactive should use defaults write, only reset should use defaults delete
-                if [[ "$action" == "active" || "$action" == "inactive" ]]; then
-                    # Use the provided value for active/inactive with proper typing
-                    write_defaults_typed "$domain" "$key" "$value"
+                elif [[ "$domain" == "com.apple.universalcontrol" ]]; then
+                    # Disable Universal Control
+                    if [[ "$action" == "active" ]]; then
+                        write_defaults_typed "$domain" "$key" "$value" "$handler"
+                    elif [[ "$action" == "inactive" ]]; then
+                        defaults -currentHost delete "$domain" "$key"
+                    fi
                 else
-                    # Use delete for reset to default
-                    defaults delete "$domain" "$key" 2>/dev/null || true
+                    # Write the inactive value with -currentHost flag (write_defaults_typed handles the flag automatically)
+                    write_defaults_typed "$domain" "$key" "$value" "$handler"
                 fi
-                sleep 1
-                ;;
-            "key_equivalents")
-                # Write a full NSUserKeyEquivalents dictionary blob as-is
-                # Expect value to be a valid plist-style dict string: '{"Menu Item"="@~i"; ... }'
-                defaults write "$domain" "$key" "$value"
-                sleep 1
-                ;;
-            "defaults_dict")
-                # Write complex dict payloads (e.g., Finder panes/toolbar)
-                defaults write "$domain" "$key" "$value"
-                sleep 1
-                ;;
-            "defaults_array")
-                # Write an array payload. Allow multiple dict items passed in value.
-                # If value already contains properly quoted items, use eval to expand them.
-                eval "defaults write \"$domain\" \"$key\" -array $value"
-                sleep 1
                 ;;
             "KeyboardShortcuts")
                 # Generic handler for keyboard shortcuts - works with any domain
@@ -8899,6 +9707,642 @@ function macos_preferences() {
                 fi
                 sleep 1
                 ;;
+            "plistbuddy")
+                # Run one or more PlistBuddy commands against a plist path in domain
+                # Commands are separated by '||' in value
+                echo "$value" | sed 's/||/\n/g' | while IFS= read -r __cmd; do
+                    if [[ -n "$__cmd" ]]; then
+                        /usr/libexec/PlistBuddy -c "$__cmd" "$domain" 2>/dev/null || true
+                    fi
+                done
+                
+                # Clear the .DS_Store files
+                # sudo rm /.DS_Store
+                # find ~ -name .DS_Store -type f -delete
+
+                # Refresh cfprefsd & Finder to reflect Finder plist changes
+                killall cfprefsd 2>/dev/null || true
+                killall Finder 2>/dev/null || true
+                sleep 1
+                ;;
+            "darkmode")
+                if [[ "$action" == "active" ]]; then
+                    defaults write NSGlobalDomain AppleIconAppearanceTheme RegularDark 2>/dev/null || true
+                    sleep 1
+                    killall Finder 2>/dev/null || true
+                    killall Dock 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults delete NSGlobalDomain AppleIconAppearanceTheme 2>/dev/null || true
+                    sleep 1
+                    killall Finder 2>/dev/null || true
+                    killall Dock 2>/dev/null || true
+                fi
+                ;;
+            "ReduceMotion")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.Accessibility ReduceMotionEnabled -bool true 2>/dev/null || true
+                    defaults write com.apple.universalaccess reduceMotion -bool true 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.Accessibility ReduceMotionEnabled -bool false 2>/dev/null || true
+                    defaults write com.apple.universalaccess reduceMotion -bool false 2>/dev/null || true
+                    echo
+                    echo "⚠️  ${YE}Note: Spotlight Search animations may require a restart to regain full functionality again.${NC}"
+                    read -r -t 2 -n 1
+                fi
+                ;;
+            "ReduceTransparency")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.universalaccess reduceTransparency -bool true 2>/dev/null || true
+                    defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool true 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.universalaccess reduceTransparency -bool false 2>/dev/null || true
+                    defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool false 2>/dev/null || true
+                fi
+                ;;
+            "DisableMouseKeys")
+                if [[ "$action" == "active" ]]; then
+                    # Active: ensure both underlying settings are false (Mouse Keys disabled)
+                    defaults write com.apple.universalaccess useMouseKeysShortcutKeys -bool false 2>/dev/null || true
+                    defaults write com.apple.universalaccess mouseDriverIgnoreTrackpad -bool false 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    # Inactive: restore both settings to true (Mouse Keys enabled / default behavior)
+                    defaults write com.apple.universalaccess useMouseKeysShortcutKeys -bool true 2>/dev/null || true
+                    defaults write com.apple.universalaccess mouseDriverIgnoreTrackpad -bool true 2>/dev/null || true
+                fi
+                ;;
+            "ShrinkSideBarInTahoe")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.finder SidebarWidth2 -int 135 2>/dev/null || true
+                    defaults write com.apple.finder FK_SidebarWidth2 -int 135 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.finder SidebarWidth2 -int 161 2>/dev/null || true
+                    defaults write com.apple.finder FK_SidebarWidth2 -int 161 2>/dev/null || true
+                fi
+                ;;
+            "ShrinkSideBarInSequoiaAndBelow")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.finder SidebarWidth -int 143 2>/dev/null || true
+                    defaults write com.apple.finder FK_SidebarWidth -int 143 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.finder SidebarWidth -int 164 2>/dev/null || true
+                    defaults write com.apple.finder FK_SidebarWidth -int 164 2>/dev/null || true
+                fi
+                ;;
+            "NevaHideMenuBarinTahoe")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.controlcenter AutoHideMenuBarOption -int 3 2>/dev/null || true
+                    defaults write NSGlobalDomain AppleMenuBarVisibleInFullscreen -bool true 2>/dev/null || true
+                    sleep 1
+                    # killall Finder 2>/dev/null || true
+                    # killall Dock 2>/dev/null || true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.controlcenter AutoHideMenuBarOption -int 2 2>/dev/null || true
+                    defaults write NSGlobalDomain AppleMenuBarVisibleInFullscreen -bool false 2>/dev/null || true
+                    sleep 1
+                    # killall Finder 2>/dev/null || true
+                    # killall Dock 2>/dev/null || true
+                fi
+                ;;
+            "Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click")
+                # Handle trackpad tap to right click
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick -int 2
+                    defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick -bool true
+                    defaults -currentHost write NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior -int 1
+                    defaults -currentHost write NSGlobalDomain com.apple.trackpad.enableSecondaryClick -bool true
+                    defaults write com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick -int 2
+                    defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool true
+                    echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
+                else
+                    if [[ "$action" == "inactive" ]]; then
+                        defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick -int 0
+                        defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick -bool false
+                        defaults -currentHost write NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior -int 0
+                        defaults -currentHost write NSGlobalDomain com.apple.trackpad.enableSecondaryClick -bool false
+                        defaults write com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick -int 0
+                        defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool false
+                        echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
+                    fi
+                fi
+                read -r -t 2 -n 1
+                ;;
+            "Show_Time_Machine_Menu_Bar_Item")
+                # Handle Time Machine Menu Bar item
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" -bool true
+
+                    # Check if TimeMachine is already in menuExtras before adding
+                    if ! /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "TimeMachine"; then
+                        /usr/libexec/PlistBuddy -c "Add :menuExtras: string '/System/Library/CoreServices/Menu Extras/TimeMachine.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                    fi 
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" -bool false
+                    
+                    # Find and remove TimeMachine from menuExtras array
+                    for i in {0..10}; do
+                        item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
+                        if [[ $item == *"TimeMachine"* ]]; then
+                            /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                            break
+                        fi
+                    done
+                fi
+                killall cfprefsd 2>/dev/null || true
+                read -r -t 1 -n 1
+                ;;
+            "Show_VPN_Menu_Bar_Item")
+                # Handle VPN Menu Bar item
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" -bool true
+                    # Check if VPN is already in menuExtras before adding
+                    # if ! /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "VPN"; then
+                    #     /usr/libexec/PlistBuddy -c "Add :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                    # fi
+                    /usr/libexec/PlistBuddy -c "Add :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" -bool false
+                    
+                    # Find and remove VPN from menuExtras array
+                    # for i in {0..10}; do
+                    #     item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
+                    #     if [[ $item == *"VPN"* ]]; then
+                    #         /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                    #         break
+                    #     fi
+                    # done
+                    /usr/libexec/PlistBuddy -c "Delete :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                fi
+                killall cfprefsd 2>/dev/null || true
+                read -r -t 1 -n 1
+                ;;
+            "PasswordManager")
+                # Handle Password Menu Bar item
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.Passwords EnableMenuBarExtra -bool true
+                    defaults write com.apple.Passwords.MenuBarExtra "NSStatusItem Visible Item-0" -bool true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.Passwords EnableMenuBarExtra -bool false
+                    defaults write com.apple.Passwords.MenuBarExtra "NSStatusItem Visible Item-0" -bool false
+                fi
+                read -r -t 1 -n 1
+                ;;
+            "Auto_Fill_Passwords_DeleteVerificationCodes")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.onetimepasscodes DeleteVerificationCodes -bool true
+                    defaults write com.apple.MobileSMS DeleteVerificationCodes -bool true
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.onetimepasscodes DeleteVerificationCodes -bool false
+                    defaults write com.apple.MobileSMS DeleteVerificationCodes -bool false
+                fi
+                ;;
+            "DisableGlobalPasswordAutoFill")
+            if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.Safari AutoFillPasswords -bool false
+                    defaults write com.apple.Safari AutoFillFromiCloudKeychain -bool false
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.Safari AutoFillPasswords -bool true
+                    defaults write com.apple.Safari AutoFillFromiCloudKeychain -bool true
+                fi
+                ;;
+            "DisableSafariPasswordAutoFillInTahoe26_4")
+                # New key introduced affecting only Safari instead of global AutoFill
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.Safari AutoFillPasswordsInSafari -bool false
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.Safari AutoFillPasswordsInSafari -bool true
+                fi
+                ;;
+            "DisableSafariPasswordAutoFillInTahoe26_3AndBelow")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.Safari AutoFillPasswords -bool false
+                    defaults write com.apple.Safari AutoFillFromiCloudKeychain -bool false
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.Safari AutoFillPasswords -bool true
+                    defaults write com.apple.Safari AutoFillFromiCloudKeychain -bool true
+                fi
+                ;;
+            "disable_Apple_Intelligence")
+                if [[ "$ARCH_TYPE" != "arm64" ]]; then
+                    echo
+                    echo "${BO}This requires an Apple Silicon machine.${NC}"
+                    echo
+                    read -r -t 1 -n 1
+                    return 1
+                elif [[ "$MACOS_MAJOR" -le 14 ]]; then
+                    echo
+                    echo "${BO}This requires macOS Sequoia 15+ or later.${NC}"
+                    read -r -t 1 -n 1
+                    echo
+                    return 1
+                # # this is dependent on being signed with an Apple ID
+                # elif [[ "$DEVICE_TYPE" == "vm" ]]; then
+                #     echo
+                #     echo "${BO}Apple Intelligence may not be avilable on virtual machines.${NC}"
+                #     read -r -t 1 -n 1
+                #     echo
+                #     return 1
+                fi
+                # Handle Apple Intelligence
+                if [[ "$action" == "active" ]]; then
+                    for key in $(defaults read com.apple.CloudSubscriptionFeatures.optIn 2>/dev/null | grep -E "^\s+[0-9]+ = 1;" | awk '{print $1}'); do
+                        defaults write com.apple.CloudSubscriptionFeatures.optIn "$key" -bool false
+                    done
+                elif [[ "$action" == "inactive" ]]; then
+                    for key in $(defaults read com.apple.CloudSubscriptionFeatures.optIn 2>/dev/null | grep -E "^\s+[0-9]+ = 0;" | awk '{print $1}'); do
+                        defaults write com.apple.CloudSubscriptionFeatures.optIn "$key" -bool true
+                    done
+                fi
+                ;;
+            "DisableSpotlightRelatedContent")
+                if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+                    # if [[ "$action" == "active" ]]; then
+                    #     # add in "Custom.relatedContents" to be excluded
+                    #     defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents"
+                    # elif [[ "$action" == "inactive" ]]; then
+                    #     defaults write com.apple.Spotlight EnabledPreferenceRules -array
+                    # fi
+                    
+                    # Read current array into a variable
+                    local current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+                    
+                    if [[ "$action" == "active" ]]; then
+                        # Add "Custom.relatedContents" if not already present
+                        if ! echo "$current_array" | grep -q "Custom.relatedContents"; then
+                            # Get all current items except Custom.relatedContents, then add it
+                            items=$(echo "$current_array" | grep -o '"[^"]*"' | grep -v "Custom.relatedContents" | tr '\n' ' ')
+                            defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents" $items
+                        fi
+                    else
+                        # Remove "Custom.relatedContents" by rebuilding array without it
+                        items=$(echo "$current_array" | grep -o '"[^"]*"' | grep -v "Custom.relatedContents" | tr '\n' ' ')
+                        if [[ -n "$items" ]]; then
+                            defaults write com.apple.Spotlight EnabledPreferenceRules -array $items
+                        else
+                            defaults write com.apple.Spotlight EnabledPreferenceRules -array
+                        fi
+                    fi
+                else
+                    echo
+                    echo "${BO}This requires macOS Tahoe 26+${NC}"
+                    read -r -t 1 -n 1
+                    return 1
+                fi
+                ;;
+            "ReduceSpotlightResultsInTahoe")
+                local current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+                
+                if [[ "$action" == "active" ]]; then
+                    # Check if Custom.relatedContents is present
+                    if echo "$current_array" | grep -q "Custom.relatedContents"; then
+                        # Preserve Custom.relatedContents
+                        defaults write com.apple.Spotlight EnabledPreferenceRules -array \
+                            "Custom.relatedContents" \
+                            "com.apple.AppStore" \
+                            "com.apple.iBooksX" \
+                            "com.apple.calculator" \
+                            "com.apple.iCal" \
+                            "com.apple.AddressBook" \
+                            "com.apple.Dictionary" \
+                            "com.apple.mail" \
+                            "com.apple.MobileSMS" \
+                            "com.apple.Notes" \
+                            "com.apple.Photos" \
+                            "com.apple.podcasts" \
+                            "com.apple.reminders" \
+                            "com.apple.Safari" \
+                            "com.apple.shortcuts" \
+                            "com.apple.tips" \
+                            "com.apple.VoiceMemos" \
+                            "System.documents" \
+                            "System.files" \
+                            "System.folders" \
+                            "System.iphoneApps" \
+                            "System.menuItems"
+                    else
+                        # No Custom.relatedContents to preserve
+                        defaults write com.apple.Spotlight EnabledPreferenceRules -array \
+                            "com.apple.AppStore" \
+                            "com.apple.iBooksX" \
+                            "com.apple.calculator" \
+                            "com.apple.iCal" \
+                            "com.apple.AddressBook" \
+                            "com.apple.Dictionary" \
+                            "com.apple.mail" \
+                            "com.apple.MobileSMS" \
+                            "com.apple.Notes" \
+                            "com.apple.Photos" \
+                            "com.apple.podcasts" \
+                            "com.apple.reminders" \
+                            "com.apple.Safari" \
+                            "com.apple.shortcuts" \
+                            "com.apple.tips" \
+                            "com.apple.VoiceMemos" \
+                            "System.documents" \
+                            "System.files" \
+                            "System.folders" \
+                            "System.iphoneApps" \
+                            "System.menuItems"
+                    fi
+                else
+                    # Remove all app/system items but preserve Custom.relatedContents if present
+                    if echo "$current_array" | grep -q "Custom.relatedContents"; then
+                        defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents"
+                    else
+                        defaults write com.apple.Spotlight EnabledPreferenceRules -array
+                    fi
+                fi
+                ;;
+            "ReduceSpotlightResultsInSequoia")
+                return 1
+                # if [[ "$action" == "active" ]]; then
+                # method 1
+                    # # Set orderedItems with only APPLICATIONS and SYSTEM_PREFS enabled
+                    # defaults write com.apple.Spotlight orderedItems -array \
+                    #     '{"enabled" = 1;"name" = "APPLICATIONS";}' \
+                    #     '{"enabled" = 0;"name" = "MENU_EXPRESSION";}' \
+                    #     '{"enabled" = 0;"name" = "CONTACT";}' \
+                    #     '{"enabled" = 0;"name" = "MENU_CONVERSION";}' \
+                    #     '{"enabled" = 0;"name" = "MENU_DEFINITION";}' \
+                    #     '{"enabled" = 0;"name" = "DOCUMENTS";}' \
+                    #     '{"enabled" = 0;"name" = "EVENT_TODO";}' \
+                    #     '{"enabled" = 0;"name" = "DIRECTORIES";}' \
+                    #     '{"enabled" = 0;"name" = "FONTS";}' \
+                    #     '{"enabled" = 0;"name" = "IMAGES";}' \
+                    #     '{"enabled" = 0;"name" = "MESSAGES";}' \
+                    #     '{"enabled" = 0;"name" = "MOVIES";}' \
+                    #     '{"enabled" = 0;"name" = "MUSIC";}' \
+                    #     '{"enabled" = 0;"name" = "MENU_OTHER";}' \
+                    #     '{"enabled" = 0;"name" = "PDF";}' \
+                    #     '{"enabled" = 0;"name" = "PRESENTATIONS";}' \
+                    #     '{"enabled" = 0;"name" = "MENU_SPOTLIGHT_SUGGESTIONS";}' \
+                    #     '{"enabled" = 0;"name" = "SPREADSHEETS";}' \
+                    #     '{"enabled" = 1;"name" = "SYSTEM_PREFS";}' \
+                    #     '{"enabled" = 0;"name" = "TIPS";}' \
+                    #     '{"enabled" = 0;"name" = "BOOKMARKS";}'
+
+                #     # method 2
+                
+                #     # Modify orderedItems in-place with PlistBuddy (preserve structure, order, and
+                #     # item set). Replacing the whole array via defaults write can cause the Spotlight
+                #     # pane in System Settings to go blank on Sequoia—e.g. if SOURCE or other
+                #     # extra/unknown categories are written, or the plist format changes.
+                #     local plist="$HOME/Library/Preferences/com.apple.Spotlight.plist"
+
+                #     # Guard: orderedItems must already exist.
+                #     # Open System Settings → Spotlight once to create it if missing.
+                #     local name
+                #     name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:0:name" "$plist" 2>/dev/null)
+                #     if [[ -z "$name" ]] || [[ "$name" == *"Does Not Exist"* ]]; then
+                #         echo "⚠️  ${YE}Spotlight orderedItems not found."
+                #         echo "   Open System Settings → Spotlight once to create it, then try again.${NC}"
+                #         read -r -t 3 -n 1
+                #         return 1
+                #     fi
+
+                #     # Modify enabled flags in-place. Never replaces the array, so system-specific
+                #     # categories like SOURCE (added by Xcode/CLT) are preserved as-is.
+                #     local idx=0
+                #     while true; do
+                #         name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:${idx}:name" "$plist" 2>/dev/null)
+                #         if [[ -z "$name" || "$name" == *"Does Not Exist"* ]]; then
+                #             break
+                #         fi
+
+                #         # boolean method
+                #         if [[ "$name" == "APPLICATIONS" || "$name" == "SYSTEM_PREFS" ]]; then
+                #             /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool true" "$plist" 2>/dev/null || true
+                #         else
+                #             /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool false" "$plist" 2>/dev/null || true
+                #         fi
+
+                #         idx=$((idx + 1))
+                #     done
+
+                #     # Flush cfprefsd cache first (PlistBuddy writes direct to disk, bypassing it),
+                #     # then restart mds/Spotlight so they pick up the updated prefs from disk.
+                #     killall cfprefsd 2>/dev/null || true
+                #     sleep 0.5
+                #     killall mds 2>/dev/null || true
+                #     killall Spotlight 2>/dev/null || true
+                # else
+                #     # # For inactive, delete the key to restore defaults
+                #     # defaults delete com.apple.Spotlight orderedItems 2>/dev/null || true
+
+                #     local plist="$HOME/Library/Preferences/com.apple.Spotlight.plist"
+                #     # Re-enable all categories in-place rather than deleting the key.
+                #     # Deleting the key forces macOS to regenerate it, which can be unreliable
+                #     # on Sequoia and may drop system-specific categories like SOURCE.
+                #     local name
+                #     name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:0:name" "$plist" 2>/dev/null)
+                #     if [[ -z "$name" || "$name" == *"Does Not Exist"* ]]; then
+                #         return 0
+                #     fi
+
+                #     local idx=0
+                #     while true; do
+                #         name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:${idx}:name" "$plist" 2>/dev/null)
+                #         [[ -z "$name" || "$name" == *"Does Not Exist"* ]] && break
+                #         /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool true" "$plist" 2>/dev/null || true
+                #         idx=$((idx + 1))
+                #     done
+
+                #     killall cfprefsd 2>/dev/null || true
+                #     sleep 0.5
+                #     killall mds 2>/dev/null || true
+                #     killall Spotlight 2>/dev/null || true
+                
+                #     # method 3
+
+                #     local plist="$HOME/Library/Preferences/com.apple.Spotlight.plist"
+
+                #     local name
+                #     name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:0:name" "$plist" 2>/dev/null)
+                #     if [[ -z "$name" || "$name" == *"Does Not Exist"* ]]; then
+                #         echo "⚠️  ${YE}Spotlight orderedItems not found."
+                #         echo "   Open System Settings → Spotlight once to create it, then try again.${NC}"
+                #         read -r -t 3 -n 1
+                #         return 1
+                #     fi
+
+                #     # Kill cfprefsd and Spotlight BEFORE writing so cfprefsd can't race
+                #     # against PlistBuddy and flush its stale in-memory cache back to disk.
+                #     # Launchd restarts cfprefsd automatically; the new instance reads from disk.
+                #     killall Spotlight  2>/dev/null || true
+                #     killall cfprefsd   2>/dev/null || true
+                #     sleep 0.5
+
+                #     local idx=0
+                #     while true; do
+                #         name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:${idx}:name" "$plist" 2>/dev/null)
+                #         [[ -z "$name" || "$name" == *"Does Not Exist"* ]] && break
+                #         if [[ "$name" == "APPLICATIONS" || "$name" == "SYSTEM_PREFS" ]]; then
+                #             /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool true"  "$plist" 2>/dev/null || true
+                #         else
+                #             /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool false" "$plist" 2>/dev/null || true
+                #         fi
+                #         idx=$((idx + 1))
+                #     done
+
+                #     # Restart mds so it picks up the updated category list from disk
+                #     killall mds 2>/dev/null || true
+
+                # else
+                #     local plist="$HOME/Library/Preferences/com.apple.Spotlight.plist"
+
+                #     local name
+                #     name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:0:name" "$plist" 2>/dev/null)
+                #     [[ -z "$name" || "$name" == *"Does Not Exist"* ]] && return 0
+
+                #     killall Spotlight  2>/dev/null || true
+                #     killall cfprefsd   2>/dev/null || true
+                #     sleep 0.5
+
+                #     local idx=0
+                #     while true; do
+                #         name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:${idx}:name" "$plist" 2>/dev/null)
+                #         [[ -z "$name" || "$name" == *"Does Not Exist"* ]] && break
+                #         /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool true" "$plist" 2>/dev/null || true
+                #         idx=$((idx + 1))
+                #     done
+
+                #     killall mds 2>/dev/null || true
+                # fi
+                # :
+                ;;
+            "Remote_Management_Menu_Bar")
+                # Handle Remote Management Menu Bar
+                    # Only show warning if sudo credentials aren't cached
+                if ! sudo -n true 2>/dev/null; then
+                    echo "📝 This requires sudo privileges. Please type your admin password then press enter."
+                fi
+                if [[ "$action" == "active" ]]; then
+                    sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist LoadRemoteManagementMenuExtra -bool true
+                elif [[ "$action" == "inactive" ]]; then
+                    sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist LoadRemoteManagementMenuExtra -bool false
+                fi
+                ;;
+            "DisableSendReadReceiptsIniMessage")
+                # Handle Password Menu Bar item
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.imagent Setting.EnableReadReceipts -bool false
+                    defaults write com.apple.imagent Setting.GlobalReadReceiptsVersionID -int 2
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.imagent Setting.EnableReadReceipts -bool true
+                    defaults write com.apple.imagent Setting.GlobalReadReceiptsVersionID -int 1
+                fi
+                ;;
+            "DisableCertainShareExtensions")
+                # Handle Share Extensions
+                local extensions=(
+                    # Items that exist on all macOS versions supported
+                    "com.apple.share.System.add-to-safari-reading-list"
+                    # "com.apple.CloudSharingUI.CopyLink"    # keep as is
+                    "com.apple.Notes.SharingExtension"
+                    "com.apple.share.System.add-to-iphoto"
+                    "com.apple.news.openinnews"
+                    "com.apple.reminders.sharingextension"
+                    "com.apple.iBooksX.SharingExtension"
+                    # "com.apple.CloudSharingUI.CreateiCloudLinkExtension"    # keep as is
+                )
+                # Version-specific additions
+                # if [[ "$MACOS_MAJOR" -ge 12 ]]; then
+                #     # Monterey+
+                #     extensions+=(
+                #         # "com.apple.shortcuts.Run-Workflow"    # Shortcuts app exists, not in Share menu until 13
+                #     )
+                # fi
+                if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                    # Ventura+
+                    extensions+=(
+                        "com.apple.shortcuts.Run-Workflow"    # Now appears in Share Menu
+                        "com.apple.freeform.sharingextension"    # Freeform added
+                    )
+                fi
+                if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+                    # Tahoe+
+                    extensions+=(
+                        "com.apple.journal.JournalShareExtension"    # Journal added
+                    )
+                fi
+
+                if [[ "$action" == "active" ]]; then
+                    # Disable each extension
+                    for ext in "${extensions[@]}"; do
+                        # echo "Disabling: $ext"
+                        pluginkit -e ignore -i "$ext"
+                    done
+                    # Also disable Contact Suggestions via its plist (if on Ventura 13 or later)
+                    if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                        defaults write com.apple.Sharing SharingPeopleSuggestionsDisabled -bool true
+                        # echo "Share extensions disabled successfully"
+                    fi
+                elif [[ "$action" == "inactive" ]]; then
+                    # Enable each extension
+                    for ext in "${extensions[@]}"; do
+                        # echo "Enabling: $ext"
+                        pluginkit -e use -i "$ext"
+                    done
+                    # Also enable Contact Suggestions via its plist (if on Ventura 13 or later)
+                    if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                        defaults write com.apple.Sharing SharingPeopleSuggestionsDisabled -bool false
+                        # echo "Share extensions enabled successfully"
+                    fi
+                fi
+                ;;
+            "KeyboardFunctionKey")
+                if [[ "$action" == "active" ]]; then
+                    defaults write com.apple.HIToolbox AppleFnUsageType -int 2
+                    defaults write com.apple.HIToolbox AppleDictationAutoEnable -bool false
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write com.apple.HIToolbox AppleFnUsageType -int 3
+                    defaults write com.apple.HIToolbox AppleDictationAutoEnable -bool true
+                fi
+                ;;
+            "NewArchiveUtilityDictIn26_4")
+                if [[ "$action" == "active" ]]; then
+                    defaults write "$domain" "$key" -dict "Selection" "MoveToTrash"
+                elif [[ "$action" == "inactive" ]]; then
+                    defaults write "$domain" "$key" -dict "Selection" "UseSameFolder"
+                fi
+                ;;
+            "UseBrightBoldInTerminal")
+                # Not reliably setting UseBrightBold to true
+                if [[ "$action" == "active" ]]; then
+                    return 1
+                fi
+
+                default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
+                startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
+                profiles_to_update=()
+                [[ -n "$default_profile" ]] && profiles_to_update+=("$default_profile")
+                [[ -n "$startup_profile" && "$startup_profile" != "$default_profile" ]] && profiles_to_update+=("$startup_profile")
+
+                if [[ "$action" == "active" ]]; then
+                    bool_val="true"
+                elif [[ "$action" == "inactive" ]]; then
+                    bool_val="false"
+                fi
+
+                failed=false
+                for profile in "${profiles_to_update[@]}"; do
+                    /usr/libexec/PlistBuddy -c "Set :'Window Settings':'$profile':UseBrightBold bool $bool_val" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null
+                    result=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
+                    [[ "$result" != "$bool_val" ]] && failed=true
+                done
+
+                [[ "$failed" == "true" ]] && return 1
+                ;;
+            "chflags")
+                if [[ "$key" == "ShowLibrary" ]]; then
+                    if [[ "$action" == "active" ]]; then
+                        chflags nohidden ~/Library 2>/dev/null || true
+                        xattr -d com.apple.FinderInfo ~/Library 2>/dev/null || true
+                    else
+                        chflags hidden ~/Library 2>/dev/null || true
+                    fi
+                fi
+                read -r -t 1 -n 1
+                ;;
             "ListViewColumns")
                 # Handle ListViewColumns settings - set or delete columns in all locations
                 local plist_file="$domain"
@@ -8921,7 +10365,7 @@ function macos_preferences() {
                 # Refresh cfprefsd & Finder to reflect Finder plist changes
                 killall cfprefsd 2>/dev/null || true
                 killall Finder 2>/dev/null || true
-                sleep 1
+                read -r -t 1 -n 1
                 ;;
             "Remove_All_DS_Store_Files")
                 if [[ "$action" == "home folder" ]]; then
@@ -8991,7 +10435,37 @@ function macos_preferences() {
                 # Refresh cfprefsd & Finder to reflect Finder plist changes
                 killall cfprefsd 2>/dev/null || true
                 killall Finder 2>/dev/null || true
-                sleep 1
+                read -r -t 1 -n 1
+                ;;
+            "ListView_calculateAllSizes")
+                # Handle ListView settings across all Finder/iCloud/Trash list views
+                local plist_file="$domain"
+                local plist_paths=(
+                    ":ICloudViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":ICloudViewSettings:ListViewSettings:calculateAllSizes"
+                    ":FK_iCloudListViewSettingsV2:calculateAllSizes"
+                    ":StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":StandardViewSettings:ListViewSettings:calculateAllSizes"
+                    ":FK_DefaultListViewSettingsV2:calculateAllSizes"
+                    ":FK_StandardViewSettings:ListViewSettings:calculateAllSizes"
+                    ":FK_StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":TrashViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
+                    ":TrashViewSettings:ListViewSettings:calculateAllSizes"
+                )
+                
+                for plist_path in "${plist_paths[@]}"; do
+                    /usr/libexec/PlistBuddy -c "Set $plist_path $value" "$plist_file" 2>/dev/null || \
+                    /usr/libexec/PlistBuddy -c "Add $plist_path bool $value" "$plist_file" 2>/dev/null || true
+                done
+                
+                # Clear the .DS_Store files
+                # sudo rm /.DS_Store
+                # find ~ -name .DS_Store -type f -delete
+
+                # Refresh cfprefsd & Finder to reflect Finder plist changes
+                killall cfprefsd 2>/dev/null || true
+                killall Finder 2>/dev/null || true
+                read -r -t 1 -n 1
                 ;;
             "Desktop_IconView_showItemInfo"|"Desktop_IconView_labelOnBottom"|"Desktop_IconView_arrangeBy"|"Desktop_IconView_textSize"|"Desktop_IconView_iconSize"|"Desktop_IconView_gridSpacing")
                 # Handle Desktop IconView settings using PlistBuddy
@@ -9023,527 +10497,29 @@ function macos_preferences() {
 
                 # Refresh Finder to reflect Finder plist changes
                 killall Finder 2>/dev/null || true
-                sleep 1
+                read -r -t 1 -n 1
                 ;;
-            "ListView_calculateAllSizes")
-                # Handle ListView settings across all Finder/iCloud/Trash list views
-                local plist_file="$domain"
-                local plist_paths=(
-                    ":ICloudViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                    ":ICloudViewSettings:ListViewSettings:calculateAllSizes"
-                    ":FK_iCloudListViewSettingsV2:calculateAllSizes"
-                    ":StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                    ":StandardViewSettings:ListViewSettings:calculateAllSizes"
-                    ":FK_DefaultListViewSettingsV2:calculateAllSizes"
-                    ":FK_StandardViewSettings:ListViewSettings:calculateAllSizes"
-                    ":FK_StandardViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                    ":TrashViewSettings:ExtendedListViewSettingsV2:calculateAllSizes"
-                    ":TrashViewSettings:ListViewSettings:calculateAllSizes"
-                )
-                
-                for plist_path in "${plist_paths[@]}"; do
-                    /usr/libexec/PlistBuddy -c "Set $plist_path $value" "$plist_file" 2>/dev/null || \
-                    /usr/libexec/PlistBuddy -c "Add $plist_path bool $value" "$plist_file" 2>/dev/null || true
-                done
-                
-                # Clear the .DS_Store files
-                # sudo rm /.DS_Store
-                # find ~ -name .DS_Store -type f -delete
-
-                # Refresh cfprefsd & Finder to reflect Finder plist changes
-                killall cfprefsd 2>/dev/null || true
-                killall Finder 2>/dev/null || true
-                sleep 1
+            "key_equivalents")
+                # Write a full NSUserKeyEquivalents dictionary blob as-is
+                # Expect value to be a valid plist-style dict string: '{"Menu Item"="@~i"; ... }'
+                defaults write "$domain" "$key" "$value"
+                read -r -t 1 -n 1
                 ;;
-            "plistbuddy")
-                # Run one or more PlistBuddy commands against a plist path in domain
-                # Commands are separated by '||' in value
-                echo "$value" | sed 's/||/\n/g' | while IFS= read -r __cmd; do
-                    if [[ -n "$__cmd" ]]; then
-                        /usr/libexec/PlistBuddy -c "$__cmd" "$domain" 2>/dev/null || true
-                    fi
-                done
-                
-                # Clear the .DS_Store files
-                # sudo rm /.DS_Store
-                # find ~ -name .DS_Store -type f -delete
-
-                # Refresh cfprefsd & Finder to reflect Finder plist changes
-                killall cfprefsd 2>/dev/null || true
-                killall Finder 2>/dev/null || true
-                sleep 1
+            "defaults_dict")
+                # Write complex dict payloads (e.g., Finder panes/toolbar)
+                defaults write "$domain" "$key" "$value"
+                read -r -t 1 -n 1
                 ;;
-            "darkmode")
-                if [[ "$action" == "active" ]]; then
-                    defaults write NSGlobalDomain AppleIconAppearanceTheme RegularDark 2>/dev/null || true
-                    sleep 1
-                    killall Finder 2>/dev/null || true
-                    killall Dock 2>/dev/null || true
-                elif [[ "$action" == "inactive" ]]; then
-                    defaults delete NSGlobalDomain AppleIconAppearanceTheme 2>/dev/null || true
-                    sleep 1
-                    killall Finder 2>/dev/null || true
-                    killall Dock 2>/dev/null || true
+            "defaults_array")
+                # Write an array payload. Allow multiple dict items passed in value.
+                # If value already contains properly quoted items, use eval to expand them.
+                eval "defaults write \"$domain\" \"$key\" -array $value"
+                read -r -t 1 -n 1
+                ;;
+            "SoftwareUpdates")
+                if [[ "$domain" == "/Library/Preferences/com.apple.SoftwareUpdate" ]]; then
+                    sudo defaults write "$domain" "$key" -bool "$value"
                 fi
-                ;;
-            "ReduceMotion")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    if [[ "$action" == "active" ]]; then
-                        defaults write com.apple.Accessibility ReduceMotionEnabled -bool true 2>/dev/null || true
-                        defaults write com.apple.universalaccess reduceMotion -bool true 2>/dev/null || true
-                    elif [[ "$action" == "inactive" ]]; then
-                        echo
-                        echo "⚠️  ${YE}Note: Spotlight Search animations may require a restart to regain full"
-                        echo "functionality again.${NC}"
-                        echo
-                        read -r -t 2 -n 1
-                        defaults write com.apple.Accessibility ReduceMotionEnabled -bool false 2>/dev/null || true
-                        defaults write com.apple.universalaccess reduceMotion -bool false 2>/dev/null || true
-                    fi
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
-                ;;
-            "ReduceTransparency")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    if [[ "$action" == "active" ]]; then
-                        defaults write com.apple.universalaccess reduceTransparency -bool true 2>/dev/null || true
-                        defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool true 2>/dev/null || true
-                    elif [[ "$action" == "inactive" ]]; then
-                        defaults write com.apple.universalaccess reduceTransparency -bool false 2>/dev/null || true
-                        defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool false 2>/dev/null || true
-                    fi
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
-                ;;
-            "DisableMouseKeys")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    if [[ "$action" == "active" ]]; then
-                        # Active: ensure both underlying settings are false (Mouse Keys disabled)
-                        defaults write com.apple.universalaccess useMouseKeysShortcutKeys -bool false 2>/dev/null || true
-                        defaults write com.apple.universalaccess mouseDriverIgnoreTrackpad -bool false 2>/dev/null || true
-                    elif [[ "$action" == "inactive" ]]; then
-                        # Inactive: restore both settings to true (Mouse Keys enabled / default behavior)
-                        defaults write com.apple.universalaccess useMouseKeysShortcutKeys -bool true 2>/dev/null || true
-                        defaults write com.apple.universalaccess mouseDriverIgnoreTrackpad -bool true 2>/dev/null || true
-                    fi
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
-                ;;
-            "ShrinkSideBarInTahoe")
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.finder SidebarWidth2 -int 135 2>/dev/null || true
-                    defaults write com.apple.finder FK_SidebarWidth2 -int 135 2>/dev/null || true
-                elif [[ "$action" == "inactive" ]]; then
-                    defaults write com.apple.finder SidebarWidth2 -int 161 2>/dev/null || true
-                    defaults write com.apple.finder FK_SidebarWidth2 -int 161 2>/dev/null || true
-                fi
-                ;;
-            "ShrinkSideBarInSequoiaAndBelow")
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.finder SidebarWidth -int 143 2>/dev/null || true
-                    defaults write com.apple.finder FK_SidebarWidth -int 143 2>/dev/null || true
-                elif [[ "$action" == "inactive" ]]; then
-                    defaults write com.apple.finder SidebarWidth -int 164 2>/dev/null || true
-                    defaults write com.apple.finder FK_SidebarWidth -int 164 2>/dev/null || true
-                fi
-                ;;
-            "NevaHideMenuBarinTahoe")
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.controlcenter AutoHideMenuBarOption -int 3 2>/dev/null || true
-                    defaults write NSGlobalDomain AppleMenuBarVisibleInFullscreen -bool true 2>/dev/null || true
-                    sleep 1
-                    killall ControlCenter 2>/dev/null || true
-                    # killall Finder 2>/dev/null || true
-                    # killall Dock 2>/dev/null || true
-                    killall SystemUIServer 2>/dev/null || true
-                elif [[ "$action" == "inactive" ]]; then
-                    defaults write com.apple.controlcenter AutoHideMenuBarOption -int 2 2>/dev/null || true
-                    defaults write NSGlobalDomain AppleMenuBarVisibleInFullscreen -bool false 2>/dev/null || true
-                    sleep 1
-                    killall ControlCenter 2>/dev/null || true
-                    # killall Finder 2>/dev/null || true
-                    # killall Dock 2>/dev/null || true
-                    killall SystemUIServer 2>/dev/null || true
-                fi
-                ;;
-            "Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click")
-                # Handle trackpad tap to right click
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick -int 2
-                    defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick -bool true
-                    defaults -currentHost write NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior -int 1
-                    defaults -currentHost write NSGlobalDomain com.apple.trackpad.enableSecondaryClick -bool true
-                    defaults write com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick -int 2
-                    defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool true
-                    echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
-                else
-                    if [[ "$action" == "inactive" ]]; then
-                        defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick -int 0
-                        defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick -bool false
-                        defaults -currentHost write NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior -int 0
-                        defaults -currentHost write NSGlobalDomain com.apple.trackpad.enableSecondaryClick -bool false
-                        defaults write com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick -int 0
-                        defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool false
-                        echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
-                    fi
-                fi
-                sleep 1
-                ;;
-            "Show_Time_Machine_Menu_Bar_Item")
-                # Handle Time Machine Menu Bar item
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" -bool true
-
-                    # Check if TimeMachine is already in menuExtras before adding
-                    if ! /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "TimeMachine"; then
-                        /usr/libexec/PlistBuddy -c "Add :menuExtras: string '/System/Library/CoreServices/Menu Extras/TimeMachine.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                    fi 
-                else [[ "$action" == "inactive" ]]
-                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" -bool false
-                    
-                    # Find and remove TimeMachine from menuExtras array
-                    for i in {0..10}; do
-                        item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
-                        if [[ $item == *"TimeMachine"* ]]; then
-                            /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                            break
-                        fi
-                    done
-                fi
-                killall cfprefsd 2>/dev/null || true
-                sleep 1
-                ;;
-            "PasswordManager")
-                # Handle Password Menu Bar item
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.Passwords EnableMenuBarExtra -bool true
-                    defaults write com.apple.Passwords.MenuBarExtra "NSStatusItem Visible Item-0" -bool true
-                else [[ "$action" == "inactive" ]]
-                    defaults write com.apple.Passwords EnableMenuBarExtra -bool false
-                    defaults write com.apple.Passwords.MenuBarExtra "NSStatusItem Visible Item-0" -bool false
-                fi
-                sleep 1
-                ;;
-            "Show_VPN_Menu_Bar_Item")
-                # Handle VPN Menu Bar item
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" -bool true
-                    # Check if VPN is already in menuExtras before adding
-                    # if ! /usr/libexec/PlistBuddy -c "Print :menuExtras" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null | grep -q "VPN"; then
-                    #     /usr/libexec/PlistBuddy -c "Add :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                    # fi
-                    /usr/libexec/PlistBuddy -c "Add :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                else [[ "$action" == "inactive" ]]
-                    defaults write com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" -bool false
-                    
-                    # Find and remove VPN from menuExtras array
-                    # for i in {0..10}; do
-                    #     item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
-                    #     if [[ $item == *"VPN"* ]]; then
-                    #         /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                    #         break
-                    #     fi
-                    # done
-                    /usr/libexec/PlistBuddy -c "Delete :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                fi
-                killall cfprefsd 2>/dev/null || true
-                sleep 1
-                ;;
-            "disable_Apple_Intelligence")
-                # Handle Apple Intelligence
-                if [[ "$action" == "active" ]]; then
-                    for key in $(defaults read com.apple.CloudSubscriptionFeatures.optIn 2>/dev/null | grep -E "^\s+[0-9]+ = 1;" | awk '{print $1}'); do
-                        defaults write com.apple.CloudSubscriptionFeatures.optIn "$key" -bool false
-                    done
-                else [[ "$action" == "inactive" ]]
-                    for key in $(defaults read com.apple.CloudSubscriptionFeatures.optIn 2>/dev/null | grep -E "^\s+[0-9]+ = 0;" | awk '{print $1}'); do
-                        defaults write com.apple.CloudSubscriptionFeatures.optIn "$key" -bool true
-                    done
-                fi
-                ;;
-            "DisableSpotlightRelatedContent")
-                # if [[ "$action" == "active" ]]; then
-                #     # add in "Custom.relatedContents" to be excluded
-                #     defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents"
-                # else [[ "$action" == "inactive" ]]
-                #     defaults write com.apple.Spotlight EnabledPreferenceRules -array
-                # fi
-                
-                # Read current array into a variable
-                current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-                
-                if [[ "$action" == "active" ]]; then
-                    # Add "Custom.relatedContents" if not already present
-                    if ! echo "$current_array" | grep -q "Custom.relatedContents"; then
-                        # Get all current items except Custom.relatedContents, then add it
-                        items=$(echo "$current_array" | grep -o '"[^"]*"' | grep -v "Custom.relatedContents" | tr '\n' ' ')
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents" $items
-                    fi
-                else
-                    # Remove "Custom.relatedContents" by rebuilding array without it
-                    items=$(echo "$current_array" | grep -o '"[^"]*"' | grep -v "Custom.relatedContents" | tr '\n' ' ')
-                    if [[ -n "$items" ]]; then
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array $items
-                    else
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array
-                    fi
-                fi
-                ;;
-            "ReduceSpotlightResultsInTahoe")
-                current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-                
-                if [[ "$action" == "active" ]]; then
-                    # Check if Custom.relatedContents is present
-                    if echo "$current_array" | grep -q "Custom.relatedContents"; then
-                        # Preserve Custom.relatedContents
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array \
-                            "Custom.relatedContents" \
-                            "com.apple.AppStore" \
-                            "com.apple.iBooksX" \
-                            "com.apple.calculator" \
-                            "com.apple.iCal" \
-                            "com.apple.AddressBook" \
-                            "com.apple.Dictionary" \
-                            "com.apple.mail" \
-                            "com.apple.MobileSMS" \
-                            "com.apple.Notes" \
-                            "com.apple.Photos" \
-                            "com.apple.podcasts" \
-                            "com.apple.reminders" \
-                            "com.apple.Safari" \
-                            "com.apple.shortcuts" \
-                            "com.apple.tips" \
-                            "com.apple.VoiceMemos" \
-                            "System.documents" \
-                            "System.files" \
-                            "System.folders" \
-                            "System.iphoneApps" \
-                            "System.menuItems"
-                    else
-                        # No Custom.relatedContents to preserve
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array \
-                            "com.apple.AppStore" \
-                            "com.apple.iBooksX" \
-                            "com.apple.calculator" \
-                            "com.apple.iCal" \
-                            "com.apple.AddressBook" \
-                            "com.apple.Dictionary" \
-                            "com.apple.mail" \
-                            "com.apple.MobileSMS" \
-                            "com.apple.Notes" \
-                            "com.apple.Photos" \
-                            "com.apple.podcasts" \
-                            "com.apple.reminders" \
-                            "com.apple.Safari" \
-                            "com.apple.shortcuts" \
-                            "com.apple.tips" \
-                            "com.apple.VoiceMemos" \
-                            "System.documents" \
-                            "System.files" \
-                            "System.folders" \
-                            "System.iphoneApps" \
-                            "System.menuItems"
-                    fi
-                else
-                    # Remove all app/system items but preserve Custom.relatedContents if present
-                    if echo "$current_array" | grep -q "Custom.relatedContents"; then
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents"
-                    else
-                        defaults write com.apple.Spotlight EnabledPreferenceRules -array
-                    fi
-                fi
-                ;;
-            "ReduceSpotlightResultsInSequoia")
-                # if [[ "$action" == "active" ]]; then
-                    # Set orderedItems with only APPLICATIONS and SYSTEM_PREFS enabled
-                    # defaults write com.apple.Spotlight orderedItems -array \
-                    #     '{"enabled" = 1;"name" = "APPLICATIONS";}' \
-                    #     '{"enabled" = 0;"name" = "MENU_EXPRESSION";}' \
-                    #     '{"enabled" = 0;"name" = "CONTACT";}' \
-                    #     '{"enabled" = 0;"name" = "MENU_CONVERSION";}' \
-                    #     '{"enabled" = 0;"name" = "MENU_DEFINITION";}' \
-                    #     '{"enabled" = 0;"name" = "DOCUMENTS";}' \
-                    #     '{"enabled" = 0;"name" = "EVENT_TODO";}' \
-                    #     '{"enabled" = 0;"name" = "DIRECTORIES";}' \
-                    #     '{"enabled" = 0;"name" = "FONTS";}' \
-                    #     '{"enabled" = 0;"name" = "IMAGES";}' \
-                    #     '{"enabled" = 0;"name" = "MESSAGES";}' \
-                    #     '{"enabled" = 0;"name" = "MOVIES";}' \
-                    #     '{"enabled" = 0;"name" = "MUSIC";}' \
-                    #     '{"enabled" = 0;"name" = "MENU_OTHER";}' \
-                    #     '{"enabled" = 0;"name" = "PDF";}' \
-                    #     '{"enabled" = 0;"name" = "PRESENTATIONS";}' \
-                    #     '{"enabled" = 0;"name" = "MENU_SPOTLIGHT_SUGGESTIONS";}' \
-                    #     '{"enabled" = 0;"name" = "SPREADSHEETS";}' \
-                    #     '{"enabled" = 1;"name" = "SYSTEM_PREFS";}' \
-                    #     '{"enabled" = 0;"name" = "TIPS";}' \
-                    #     '{"enabled" = 0;"name" = "BOOKMARKS";}'
-
-                    # # Modify orderedItems in-place with PlistBuddy (preserve structure, order, and
-                    # # item set). Replacing the whole array via defaults write can cause the Spotlight
-                    # # pane in System Settings to go blank on Sequoia—e.g. if SOURCE or other
-                    # # extra/unknown categories are written, or the plist format changes.
-                    # local plist="$HOME/Library/Preferences/com.apple.Spotlight.plist"
-                    # local name
-                    # name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:0:name" "$plist" 2>/dev/null)
-                    # if [[ -z "$name" ]] || [[ "$name" == *"Does Not Exist"* ]]; then
-                    #     echo "⚠️  ${YE}Spotlight orderedItems not found."
-                    #     echo "   Open System Settings → Spotlight once to create it, then try again.${NC}"
-                    #     sleep 2
-                    #     return 1
-                    # fi
-                    # local idx=0
-                    # while true; do
-                    #     name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:${idx}:name" "$plist" 2>/dev/null)
-                    #     if [[ -z "$name" ]] || [[ "$name" == *"Does Not Exist"* ]]; then
-                    #         break
-                    #     fi
-                    #     # boolean method
-                    #     # if [[ "$name" == "APPLICATIONS" ]] || [[ "$name" == "SYSTEM_PREFS" ]]; then
-                    #     #     /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool true" "$plist" 2>/dev/null || true
-                    #     # else
-                    #     #     /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool false" "$plist" 2>/dev/null || true
-                    #     # fi
-                        
-                    #     # integer method
-                    #     if [[ "$name" == "APPLICATIONS" ]] || [[ "$name" == "SYSTEM_PREFS" ]]; then
-                    #         /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled integer 1" "$plist" 2>/dev/null || true
-                    #     else
-                    #         /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled integer 0" "$plist" 2>/dev/null || true
-                    #     fi
-                    #     idx=$((idx + 1))
-                    # done
-
-                    # killall mds 2>/dev/null || true
-                    # killall Spotlight 2>/dev/null || true
-                    # sleep 1
-                    # killall cfprefsd 2>/dev/null || true
-                # else
-                #     # For inactive, delete the key to restore defaults
-                #     defaults delete com.apple.Spotlight orderedItems 2>/dev/null || true
-                # fi
-                :
-                ;;
-            "Remote_Management_Menu_Bar")
-                # Handle Remote Management Menu Bar
-                if [[ "$action" == "active" ]]; then
-                    # Only show warning if sudo credentials aren't cached
-                    if ! sudo -n true 2>/dev/null; then
-                        echo "📝 This requires sudo privileges. Please type your admin password, then press enter."
-                    fi
-                    sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist LoadRemoteManagementMenuExtra -bool true
-                else
-                    if [[ "$action" == "inactive" ]]; then
-                        # Only show warning if sudo credentials aren't cached
-                        if ! sudo -n true 2>/dev/null; then
-                            echo "📝 This requires sudo privileges. Please type your admin password then press enter."
-                        fi
-                        sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist LoadRemoteManagementMenuExtra -bool false
-                    fi
-                fi
-                sleep 1
-                ;;
-            "DisableSendReadReceiptsIniMessage")
-                # Handle Password Menu Bar item
-                if [[ "$action" == "active" ]]; then
-                    defaults write com.apple.imagent Setting.EnableReadReceipts -bool false
-                    defaults write com.apple.imagent Setting.GlobalReadReceiptsVersionID -int 2
-                else [[ "$action" == "inactive" ]]
-                    defaults write com.apple.imagent Setting.EnableReadReceipts -bool true
-                    defaults write com.apple.imagent Setting.GlobalReadReceiptsVersionID -int 1
-                fi
-                ;;
-            "DisableCertainShareExtensions")
-                # Handle Share Extensions
-                extensions=(
-                    "com.apple.share.System.add-to-safari-reading-list"
-                    # "com.apple.CloudSharingUI.CopyLink"    # keep as is
-                    "com.apple.Notes.SharingExtension"
-                    "com.apple.share.System.add-to-iphoto"
-                    "com.apple.reminders.sharingextension"
-                    "com.apple.iBooksX.SharingExtension"
-                    "com.apple.shortcuts.Run-Workflow"
-                    "com.apple.freeform.sharingextension"
-                    # "com.apple.CloudSharingUI.CreateiCloudLinkExtension"    # keep as is
-                )
-                if [[ "$action" == "active" ]]; then
-                    # Disable each extension
-                    for ext in "${extensions[@]}"; do
-                        # echo "Disabling: $ext"
-                        pluginkit -e ignore -i "$ext"
-                    done
-                    # Also disable Contact Suggestions via the plist
-                    defaults write com.apple.Sharing SharingPeopleSuggestionsDisabled -bool true
-                    # echo "Share extensions disabled successfully"
-                else [[ "$action" == "inactive" ]]
-                    # Enable each extension
-                    for ext in "${extensions[@]}"; do
-                        # echo "Disabling: $ext"
-                        pluginkit -e use -i "$ext"
-                    done
-                    # Also enable Contact Suggestions via the plist
-                    defaults write com.apple.Sharing SharingPeopleSuggestionsDisabled -bool false
-                    # echo "Share extensions enabled successfully"
-                fi
-                ;;
-            "UseBrightBoldInTerminal")
-                # Not reliably setting UseBrightBold to true
-                if [[ "$action" == "active" ]]; then
-                    return 1
-                fi
-
-                default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
-                startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
-                profiles_to_update=()
-                [[ -n "$default_profile" ]] && profiles_to_update+=("$default_profile")
-                [[ -n "$startup_profile" && "$startup_profile" != "$default_profile" ]] && profiles_to_update+=("$startup_profile")
-
-                if [[ "$action" == "active" ]]; then
-                    bool_val="true"
-                elif [[ "$action" == "inactive" ]]; then
-                    bool_val="false"
-                fi
-
-                failed=false
-                for profile in "${profiles_to_update[@]}"; do
-                    /usr/libexec/PlistBuddy -c "Set :'Window Settings':'$profile':UseBrightBold bool $bool_val" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null
-                    result=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
-                    [[ "$result" != "$bool_val" ]] && failed=true
-                done
-
-                [[ "$failed" == "true" ]] && return 1
-                ;;
-            "chflags")
-                if [[ "$key" == "ShowLibrary" ]]; then
-                    if [[ "$action" == "active" ]]; then
-                        chflags nohidden ~/Library 2>/dev/null || true
-                        xattr -d com.apple.FinderInfo ~/Library 2>/dev/null || true
-                    else
-                        chflags hidden ~/Library 2>/dev/null || true
-                    fi
-                fi
-                sleep 1
                 ;;
             "sudo")
                 if [[ "$key" == "schedule" ]]; then
@@ -9554,20 +10530,15 @@ function macos_preferences() {
                     fi
                 fi
                 ;;
-            "SoftwareUpdates")
-                if [[ "$domain" == "/Library/Preferences/com.apple.SoftwareUpdate" ]]; then
-                    sudo defaults write "$domain" "$key" -bool "$value"
-                fi
-                ;;
             "launchctl")
                 # No defaults write; handled in restart block
-                sleep 1
+                read -r -t 1 -n 1
                 ;;
             *)
                 write_defaults_typed "$domain" "$key" "$value" "$handler"
                 ;;
         esac
-        
+
         # Restart affected services
         case "$domain" in
             "com.apple.dock")
@@ -9578,8 +10549,15 @@ function macos_preferences() {
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
+                    # killall cfprefsd 2>/dev/null || true
                 fi
+                killall Finder 2>/dev/null || true
+                echo "${YE}Restarted Finder...${NC}"
+                ;;
+            "com.apple.bird")
                 killall Finder 2>/dev/null || true
                 echo "${YE}Restarted Finder...${NC}"
                 ;;
@@ -9588,8 +10566,9 @@ function macos_preferences() {
                 echo "${YE}Restarted SystemUIServer...${NC}"
                 ;;
             "com.apple.controlcenter")
-                if [[ "$key" == "Spotlight" ]]; then
+                if [[ "$domain" == "com.apple.Spotlight" ]]; then
                     killall Spotlight 2>/dev/null || true
+                    echo "${YE}Restarted Spotlight...${NC}"
                 # elif [[ "$key" == "Siri" ]]; then
                 #     killall Siri 2>/dev/null || true
                 # elif [[ "$key" == "Weather" ]]; then
@@ -9597,8 +10576,9 @@ function macos_preferences() {
                 #     killall WeatherMenu 2>/dev/null || true
                 fi
                 killall SystemUIServer 2>/dev/null || true
+                echo "${YE}Restarted SystemUIServer...${NC}"
                 killall ControlCenter 2>/dev/null || true
-                echo "${YE}Restarted ControlCenter & SystemUIServer...${NC}"
+                echo "${YE}Restarted ControlCenter...${NC}"
                 ;;
             "com.apple.WindowManager")
                 killall WindowManager 2>/dev/null || true
@@ -9606,57 +10586,39 @@ function macos_preferences() {
                 ;;
             "com.apple.menuextra.clock")
                 killall SystemUIServer 2>/dev/null || true
+                echo "${YE}Restarted SystemUIServer...${NC}"
                 killall ControlCenter 2>/dev/null || true
-                echo "${YE}Restarted ControlCenter & SystemUIServer...${NC}"
+                echo "${YE}Restarted ControlCenter...${NC}"
                 ;;
             "com.apple.Accessibility")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall UniversalAccessApp 2>/dev/null || true
-                    killall universalaccessd 2>/dev/null || true
-                    if [[ "$handler" == "ReduceMotion" ]]; then
-                        killall Spotlight 2>/dev/null || true
-                        killall corespotlightd 2>/dev/null || true
-                        killall spotlightknowledged 2>/dev/null || true
-                        killall SystemUIServer 2>/dev/null || true
-                        killall ControlCenter 2>/dev/null || true
-                        killall WindowServer 2>/dev/null || true
-                        killall Dock 2>/dev/null || true
-                        killall cfprefsd 2>/dev/null || true
-                    fi
-                    # echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
+                killall UniversalAccessApp 2>/dev/null || true
+                killall universalaccessd 2>/dev/null || true
+                if [[ "$handler" == "ReduceMotion" ]]; then
+                    killall Spotlight 2>/dev/null || true
+                    killall corespotlightd 2>/dev/null || true
+                    killall spotlightknowledged 2>/dev/null || true
+                    killall SystemUIServer 2>/dev/null || true
+                    killall ControlCenter 2>/dev/null || true
+                    killall WindowServer 2>/dev/null || true
+                    killall Dock 2>/dev/null || true
+                    killall cfprefsd 2>/dev/null || true
                 fi
+                echo "${YE}Restarted Services...${NC}"
+                # echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
                 ;;
             "com.apple.universalaccess")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall UniversalAccessApp 2>/dev/null || true
-                    killall universalaccessd 2>/dev/null || true
-                    # killall UniversalAccessAuthWarning 2>/dev/null || true
-                    # killall "System Preferences" 2>/dev/null
-                    if [[ "$handler" == "ReduceTransparency" ]]; then
-                        killall Dock 2>/dev/null || true
-                        killall SystemUIServer 2>/dev/null || true
-                        killall ControlCenter 2>/dev/null || true
-                        killall Finder 2>/dev/null || true
-                        killall cfprefsd 2>/dev/null || true
-                    fi
-                    echo "${YE}Restarted Services...${NC}"
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
+                killall UniversalAccessApp 2>/dev/null || true
+                killall universalaccessd 2>/dev/null || true
+                # killall UniversalAccessAuthWarning 2>/dev/null || true
+                # killall "System Preferences" 2>/dev/null
+                if [[ "$handler" == "ReduceTransparency" ]]; then
+                    killall Dock 2>/dev/null || true
+                    killall SystemUIServer 2>/dev/null || true
+                    killall ControlCenter 2>/dev/null || true
+                    killall Finder 2>/dev/null || true
+                    killall cfprefsd 2>/dev/null || true
                 fi
+                echo "${YE}Restarted Services...${NC}"
                 ;;
             "com.apple.systemuiserver")
                 # killall ControlCenter 2>/dev/null || true
@@ -9665,26 +10627,23 @@ function macos_preferences() {
             "com.apple.universalcontrol")
                 if [[ "$key" == "Spotlight" ]]; then
                     killall Spotlight 2>/dev/null || true
+                    echo "${YE}Restarted Spotlight...${NC}"
                 fi
                 killall SystemUIServer 2>/dev/null || true
+                echo "${YE}Restarted SystemUIServer...${NC}"
                 killall ControlCenter 2>/dev/null || true
-                echo "${YE}Restarted Services...${NC}"
-                ;;
-            "launchctl")
-                if [[ "$action" == "active" ]]; then
-                    launchctl load -w "$key" 2>/dev/null || true
-                else
-                    launchctl unload -w "$key" 2>/dev/null || true
-                fi
+                echo "${YE}Restarted ControlCenter...${NC}"
                 ;;
             "NSGlobalDomain")
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall Finder 2>/dev/null || true
+                    echo "${YE}Restarted Finder...${NC}"
                     killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
                     # killall cfprefsd 2>/dev/null || true
-                    echo "${YE}Restarted Services...${NC}"
                 else
                     killall SystemUIServer 2>/dev/null || true
                     echo "${YE}Restarted SystemUIServer...${NC}"
@@ -9695,96 +10654,69 @@ function macos_preferences() {
                 echo "${YE}Restarted Spotlight...${NC}"
                 ;;
             "com.apple.Safari")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall Safari 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to read/write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall Safari 2>/dev/null || true
+                echo "${YE}Restarted Safari...${NC}"
                 ;;
             "com.apple.MobileSMS")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall Messages 2>/dev/null || true
-                    killall imagent 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall Messages 2>/dev/null || true
+                echo "${YE}Restarted Messages...${NC}"
+                killall imagent 2>/dev/null || true
+                echo "${YE}Restarted imagent...${NC}"
                 ;;
             "com.apple.imagent")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall Messages 2>/dev/null || true
-                    killall imagent 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall Messages 2>/dev/null || true
+                echo "${YE}Restarted Messages...${NC}"
+                killall imagent 2>/dev/null || true
+                echo "${YE}Restarted imagent...${NC}"
                 ;;
             "com.apple.Passwords")
                 killall Passwords 2>/dev/null || true
+                echo "${YE}Restarted Passwords...${NC}"
                 killall PasswordsMenuBarExtra 2>/dev/null || true
+                echo "${YE}Restarted PasswordsMenuBarExtra...${NC}"
                 ;;
             "com.apple.TextEdit")
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
                     # killall cfprefsd 2>/dev/null || true
                 fi
                 killall TextEdit 2>/dev/null || true
+                echo "${YE}Restarted TextEdit...${NC}"
                 ;;
             "com.apple.SocialLayer")
                 killall sociallayerd 2>/dev/null || true
+                echo "${YE}Restarted SocialLayer...${NC}"
                 ;;
             "com.apple.archiveutility")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall "Archive Utility" 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to read/write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall "Archive Utility" 2>/dev/null || true
+                echo "${YE}Restarted Archive Utility...${NC}"
                 ;;
             "com.apple.Preview")
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
                 fi
                 killall Preview 2>/dev/null || true
                 echo "${YE}Restarted Preview...${NC}"
                 ;;
             "com.apple.Terminal")
                 echo "${BO}Please quit Terminal.app for changes to take effect...${NC}"
-                sleep 2
+                read -r -t 2 -n 1
                 # killall Terminal 2>/dev/null || true
                 # echo "${YE}Restarted Terminal...${NC}"
                 ;;
-
         esac
         
         # echo "${GR}✅ $action completed successfully!${NC}"
         # echo "${GR}✅ Done!${NC}"        
-        sleep 0.5
+        # sleep 0.5
     }
     # Helper function to reset preference to default
     reset_preference_to_default() {
@@ -9794,11 +10726,26 @@ function macos_preferences() {
         local handler="$4"
         
         echo
+        case "$domain" in
+            com.apple.Safari|com.apple.universalaccess|com.apple.archiveutility|com.apple.MobileSMS)
+                if [[ "$full_disk_access" == "false" ]]; then
+                    # exit early
+                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
+                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission."
+                    read -r -t 4 -n 1
+                    echo
+                    return 1
+                fi
+            ;;
+        esac
         # echo "${YE}Resetting $key to default...${NC}"
         echo "${YE}Applying changes...${NC}"  
         
         # Handles handler cases
         case "$handler" in
+            "delete")
+                defaults delete "$domain" "$key" 2>/dev/null || true
+                ;;
             *"-currentHost"*)
                 # Handle currentHost handlers
                 if [[ -n "$reset_val" ]]; then
@@ -9806,29 +10753,22 @@ function macos_preferences() {
                         # Delete with -currentHost flag
                         defaults -currentHost delete "$domain" "$key" 2>/dev/null || true
                     else
-                        if [[ "$key" == "Spotlight" ]]; then
+                        if [[ "$domain" == "com.apple.Spotlight" ]]; then
                             defaults -currentHost write com.apple.Spotlight MenuItemHidden -bool false 2>/dev/null || true
                             defaults write com.apple.Spotlight "NSStatusItem VisibleCC Item-0" -bool true 2>/dev/null || true
                         # elif [[ "$key" == "Siri" ]]; then
                         #     defaults -currentHost write com.apple.Siri StatusMenuVisible -bool false 2>/dev/null || true
+                        else
+                            # Write the reset_val with -currentHost flag (write_defaults_typed handles the flag automatically)
+                            write_defaults_typed "$domain" "$key" "$reset_val" "$handler"
                         fi
-                        # Write the reset_val with -currentHost flag (write_defaults_typed handles the flag automatically)
-                        write_defaults_typed "$domain" "$key" "$reset_val" "$handler"
                     fi
                 fi
-                ;;
-            "delete")
-                defaults delete "$domain" "$key" 2>/dev/null || true
                 ;;
             "writeResetValue")
                 # Write the reset_val using write_defaults_typed
                 # This handles preferences that need to be reset to a specific value
                 write_defaults_typed "$domain" "$key" "$reset_val" "$handler"
-                ;;
-            "chflags")
-                if [[ "$key" == "ShowLibrary" ]]; then
-                    chflags hidden ~/Library 2>/dev/null || true
-                fi
                 ;;
             "KeyboardShortcuts")
                 # Generic handler for keyboard shortcuts reset - works with any domain
@@ -9876,6 +10816,263 @@ function macos_preferences() {
                 # done
                 killall cfprefsd 2>/dev/null || true
                 sleep 1
+                ;;
+            "darkmode")
+                defaults delete NSGlobalDomain AppleIconAppearanceTheme 2>/dev/null || true
+                sleep 1
+                killall Finder 2>/dev/null || true
+                killall Dock 2>/dev/null || true
+                ;;
+            "UniversalAccessNeedsFDA")
+                write_defaults_typed "$domain" "$key" "$reset_val" "$handler"
+                ;;
+            "ReduceMotion")
+                defaults write com.apple.Accessibility ReduceMotionEnabled -bool false 2>/dev/null || true
+                defaults write com.apple.universalaccess reduceMotion -bool false 2>/dev/null || true
+                echo
+                echo "⚠️  ${YE}Note: Spotlight Search animations may require a restart to regain full functionality again."
+                read -r -t 2 -n 1
+                ;;
+            "ReduceTransparency")
+                defaults write com.apple.universalaccess reduceTransparency -bool false 2>/dev/null || true
+                defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool false 2>/dev/null || true
+                ;;
+            "DisableMouseKeys")
+                # Reset both underlying settings to their default/expected enabled state
+                defaults write com.apple.universalaccess useMouseKeysShortcutKeys -bool true 2>/dev/null || true
+                defaults write com.apple.universalaccess mouseDriverIgnoreTrackpad -bool true 2>/dev/null || true
+                ;;
+            "ShrinkSideBarInTahoe")
+                defaults write com.apple.finder SidebarWidth2 -int 161 2>/dev/null || true
+                defaults write com.apple.finder FK_SidebarWidth2 -int 161 2>/dev/null || true
+                ;;
+            "ShrinkSideBarInSequoiaAndBelow")
+                defaults write com.apple.finder SidebarWidth -int 164 2>/dev/null || true
+                defaults write com.apple.finder FK_SidebarWidth -int 164 2>/dev/null || true
+                ;;
+            "Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click")
+                defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick -int 0
+                defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick -bool false
+                defaults -currentHost write NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior -int 0
+                defaults -currentHost write NSGlobalDomain com.apple.trackpad.enableSecondaryClick -bool false
+                defaults write com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick -int 0
+                defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool false
+                echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
+                read -r -t 2 -n 1
+                ;;
+            "Show_Time_Machine_Menu_Bar_Item")
+                # Handle VPN Menu Bar item
+                # if [[ "$key" == "Show_VPN_Menu_Bar_Item" ]]; then
+                defaults delete com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" 2>/dev/null
+                
+                # Find and remove VPN from menuExtras array
+                # for i in {0..10}; do
+                #     item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
+                #     if [[ $item == *"VPN"* ]]; then
+                #         /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                #         break
+                #     fi
+                # done
+                /usr/libexec/PlistBuddy -c "Delete :menuExtras: string '/System/Library/CoreServices/Menu Extras/TimeMachine.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null  
+                
+                # else
+                #     echo "⚠️ ${BO}Could not reset to default: VPN Menu Bar item.${NC}"
+                # fi
+                killall cfprefsd 2>/dev/null || true
+                ;;
+            "Show_VPN_Menu_Bar_Item")
+                # Handle VPN Menu Bar item
+                # if [[ "$key" == "Show_VPN_Menu_Bar_Item" ]]; then
+                defaults delete com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" 2>/dev/null
+                
+                # Find and remove VPN from menuExtras array
+                # for i in {0..10}; do
+                #     item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
+                #     if [[ $item == *"VPN"* ]]; then
+                #         /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                #         break
+                #     fi
+                # done
+                /usr/libexec/PlistBuddy -c "Delete :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
+                # else
+                #     echo "⚠️ ${BO}Could not reset to default: VPN Menu Bar item.${NC}"
+                # fi
+                killall cfprefsd 2>/dev/null || true
+                ;;
+            "PasswordManager")
+                defaults write com.apple.Passwords EnableMenuBarExtra -bool false
+                defaults write com.apple.Passwords.MenuBarExtra "NSStatusItem Visible Item-0" -bool false
+                read -r -t 1 -n 1
+                ;;
+            "Auto_Fill_Passwords_DeleteVerificationCodes")
+                defaults write com.apple.onetimepasscodes DeleteVerificationCodes -bool false
+                defaults write com.apple.MobileSMS DeleteVerificationCodes -bool false
+                ;;
+            "DisableGlobalPasswordAutoFill")
+                defaults write com.apple.Safari AutoFillPasswords -bool true
+                defaults write com.apple.Safari AutoFillFromiCloudKeychain -bool true
+                ;;
+            "DisableSafariPasswordAutoFillInTahoe26_4")
+                # New key introduced affecting only Safari instead of global AutoFill
+                defaults write com.apple.Safari AutoFillPasswordsInSafari -bool true
+                ;;
+            "DisableSafariPasswordAutoFillInTahoe26_3AndBelow")
+                defaults write com.apple.Safari AutoFillPasswords -bool true
+                defaults write com.apple.Safari AutoFillFromiCloudKeychain -bool true
+                ;;
+            "DisableSpotlightRelatedContent")
+                # defaults write com.apple.Spotlight EnabledPreferenceRules -array
+                
+                # Read current array into a variable
+                local current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+                
+                # Remove "Custom.relatedContents" by rebuilding array without it
+                items=$(echo "$current_array" | grep -o '"[^"]*"' | grep -v "Custom.relatedContents" | tr '\n' ' ')
+                if [[ -n "$items" ]]; then
+                    defaults write com.apple.Spotlight EnabledPreferenceRules -array $items
+                else
+                    defaults write com.apple.Spotlight EnabledPreferenceRules -array
+                fi
+                ;;
+            "ReduceSpotlightResultsInTahoe")
+                local current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
+                
+                # Remove all app/system items but preserve Custom.relatedContents if present
+                if echo "$current_array" | grep -q "Custom.relatedContents"; then
+                    defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents"
+                else
+                    defaults write com.apple.Spotlight EnabledPreferenceRules -array
+                fi
+                ;;
+            "ReduceSpotlightResultsInSequoia")
+                return 1
+                # method 1
+
+                # # Reset to default by deleting the orderedItems key
+                # defaults delete com.apple.Spotlight orderedItems 2>/dev/null || true
+
+
+                # # method 2
+
+                # # # For inactive, delete the key to restore defaults
+                # # defaults delete com.apple.Spotlight orderedItems 2>/dev/null || true
+
+                # local plist="$HOME/Library/Preferences/com.apple.Spotlight.plist"
+                # # Re-enable all categories in-place rather than deleting the key.
+                # # Deleting the key forces macOS to regenerate it, which can be unreliable
+                # # on Sequoia and may drop system-specific categories like SOURCE.
+                # local name
+                # name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:0:name" "$plist" 2>/dev/null)
+                # if [[ -z "$name" || "$name" == *"Does Not Exist"* ]]; then
+                #     return 0
+                # fi
+
+                # local idx=0
+                # while true; do
+                #     name=$(/usr/libexec/PlistBuddy -c "Print :orderedItems:${idx}:name" "$plist" 2>/dev/null)
+                #     [[ -z "$name" || "$name" == *"Does Not Exist"* ]] && break
+                #     /usr/libexec/PlistBuddy -c "Set :orderedItems:${idx}:enabled bool true" "$plist" 2>/dev/null || true
+                #     idx=$((idx + 1))
+                # done
+
+                # killall cfprefsd 2>/dev/null || true
+                # sleep 0.5
+                # killall mds 2>/dev/null || true
+                # killall Spotlight 2>/dev/null || true
+                # :
+                ;;
+            "Remote_Management_Menu_Bar")
+                # Only show warning if sudo credentials aren't cached
+                if ! sudo -n true 2>/dev/null; then
+                    echo "📝 This requires sudo privileges. Please type your admin password, then press enter."
+                fi
+                if sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist LoadRemoteManagementMenuExtra -bool false; then
+                    :
+                else
+                    echo "⚠️ ${BO}Could not reset Remote Management Menu Bar icon.${NC}"
+                fi
+                ;;
+            "DisableSendReadReceiptsIniMessage")
+                defaults write com.apple.imagent Setting.EnableReadReceipts -bool true
+                defaults write com.apple.imagent Setting.GlobalReadReceiptsVersionID -int 1
+                ;;
+            "DisableCertainShareExtensions")
+                # Handle Share Extensions
+                local extensions=(
+                    # Items that exist on all macOS versions supported
+                    "com.apple.share.System.add-to-safari-reading-list"
+                    # "com.apple.CloudSharingUI.CopyLink"    # keep as is
+                    "com.apple.Notes.SharingExtension"
+                    "com.apple.share.System.add-to-iphoto"
+                    "com.apple.news.openinnews"
+                    "com.apple.reminders.sharingextension"
+                    "com.apple.iBooksX.SharingExtension"
+                    # "com.apple.CloudSharingUI.CreateiCloudLinkExtension"    # keep as is
+                )
+                # Version-specific additions
+                # if [[ "$MACOS_MAJOR" -ge 12 ]]; then
+                #     # Monterey+
+                #     extensions+=(
+                #         # "com.apple.shortcuts.Run-Workflow"    # Shortcuts app exists, not in Share menu until 13
+                #     )
+                # fi
+                if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                    # Ventura+
+                    extensions+=(
+                        "com.apple.shortcuts.Run-Workflow"    # Now appears in Share Menu
+                        "com.apple.freeform.sharingextension"    # Freeform added
+                    )
+                fi
+                if [[ "$MACOS_MAJOR" -ge 26 ]]; then
+                    # Tahoe+
+                    extensions+=(
+                        "com.apple.journal.JournalShareExtension"    # Journal added
+                    )
+                fi
+                
+                # Enable each extension
+                for ext in "${extensions[@]}"; do
+                    # echo "Enabling: $ext"
+                    # pluginkit -e default -i "$ext"
+                    pluginkit -e use -i "$ext"
+                done
+                # Also enable Contact Suggestions via the plist
+                if [[ "$MACOS_MAJOR" -ge 13 ]]; then
+                    defaults write com.apple.Sharing SharingPeopleSuggestionsDisabled -bool false
+                    # echo "Share extensions enabled successfully"
+                fi
+                ;;
+            "KeyboardFunctionKey")
+                defaults write com.apple.HIToolbox AppleFnUsageType -int 3
+                defaults write com.apple.HIToolbox AppleDictationAutoEnable -bool true
+                ;;
+            "NewArchiveUtilityDictIn26_4")
+                defaults write "$domain" "$key" -dict "Selection" "UseSameFolder"
+                ;;
+            "UseBrightBoldInTerminal")
+                default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
+                startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
+                profiles_to_update=()
+                [[ -n "$default_profile" ]] && profiles_to_update+=("$default_profile")
+                [[ -n "$startup_profile" && "$startup_profile" != "$default_profile" ]] && profiles_to_update+=("$startup_profile")
+
+                if [[ "$reset_val" == "reset" ]]; then
+                    bool_val="false"
+                fi
+
+                failed=false
+                for profile in "${profiles_to_update[@]}"; do
+                    /usr/libexec/PlistBuddy -c "Set :'Window Settings':'$profile':UseBrightBold bool $bool_val" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null
+                    result=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
+                    [[ "$result" != "$bool_val" ]] && failed=true
+                done
+
+                [[ "$failed" == "true" ]] && return 1
+                ;;
+            "chflags")
+                if [[ "$key" == "ShowLibrary" ]]; then
+                    chflags hidden ~/Library 2>/dev/null || true
+                fi
                 ;;
             "ListViewColumns")
                 # Handle ListViewColumns settings reset - delete columns from all locations
@@ -9943,35 +11140,6 @@ function macos_preferences() {
                 killall Finder 2>/dev/null || true
                 sleep 1
                 ;;
-            "Desktop_IconView_showItemInfo"|"Desktop_IconView_labelOnBottom"|"Desktop_IconView_arrangeBy"|"Desktop_IconView_textSize"|"Desktop_IconView_iconSize"|"Desktop_IconView_gridSpacing")
-                # Handle Desktop IconView settings reset using PlistBuddy
-                local plist_file="$domain"
-                local plist_path="$key"
-                local plist_type="string"
-                case "$handler" in
-                    Desktop_IconView_showItemInfo|Desktop_IconView_labelOnBottom)
-                        plist_type="bool"
-                        ;;
-                    Desktop_IconView_arrangeBy)
-                        plist_type="string"
-                        ;;
-                    Desktop_IconView_textSize|Desktop_IconView_iconSize|Desktop_IconView_gridSpacing)
-                        plist_type="real"
-                        ;;
-                esac
-
-                /usr/libexec/PlistBuddy -c "Set $plist_path $reset_val" "$plist_file" 2>/dev/null || \
-                /usr/libexec/PlistBuddy -c "Add $plist_path $plist_type $reset_val" "$plist_file" 2>/dev/null || true
-                
-                # Clear the .DS_Store files
-                # sudo rm /.DS_Store
-                # find ~ -name .DS_Store -type f -delete
-
-                # Refresh cfprefsd & Finder to reflect Finder plist changes
-                killall cfprefsd 2>/dev/null || true
-                killall Finder 2>/dev/null || true
-                sleep 1
-                ;;
             "ListView_calculateAllSizes")
                 # Handle ListView settings reset across all Finder/iCloud/Trash list views
                 local plist_file="$domain"
@@ -10002,201 +11170,34 @@ function macos_preferences() {
                 killall Finder 2>/dev/null || true
                 sleep 1
                 ;;
-            "darkmode")
-                defaults delete NSGlobalDomain AppleIconAppearanceTheme 2>/dev/null || true
-                sleep 1
+            "Desktop_IconView_showItemInfo"|"Desktop_IconView_labelOnBottom"|"Desktop_IconView_arrangeBy"|"Desktop_IconView_textSize"|"Desktop_IconView_iconSize"|"Desktop_IconView_gridSpacing")
+                # Handle Desktop IconView settings reset using PlistBuddy
+                local plist_file="$domain"
+                local plist_path="$key"
+                local plist_type="string"
+                case "$handler" in
+                    Desktop_IconView_showItemInfo|Desktop_IconView_labelOnBottom)
+                        plist_type="bool"
+                        ;;
+                    Desktop_IconView_arrangeBy)
+                        plist_type="string"
+                        ;;
+                    Desktop_IconView_textSize|Desktop_IconView_iconSize|Desktop_IconView_gridSpacing)
+                        plist_type="real"
+                        ;;
+                esac
+
+                /usr/libexec/PlistBuddy -c "Set $plist_path $reset_val" "$plist_file" 2>/dev/null || \
+                /usr/libexec/PlistBuddy -c "Add $plist_path $plist_type $reset_val" "$plist_file" 2>/dev/null || true
+                
+                # Clear the .DS_Store files
+                # sudo rm /.DS_Store
+                # find ~ -name .DS_Store -type f -delete
+
+                # Refresh cfprefsd & Finder to reflect Finder plist changes
+                killall cfprefsd 2>/dev/null || true
                 killall Finder 2>/dev/null || true
-                killall Dock 2>/dev/null || true
-                ;;
-            "ReduceMotion")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    echo
-                    echo "⚠️  ${YE}Note: Spotlight Search animations may require a restart to regain full"
-                    echo "functionality again.${NC}"
-                    echo
-                    read -r -t 2 -n 1
-                    defaults write com.apple.Accessibility ReduceMotionEnabled -bool false 2>/dev/null || true
-                    defaults write com.apple.universalaccess reduceMotion -bool false 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
-                ;;
-            "ReduceTransparency")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    defaults write com.apple.universalaccess reduceTransparency -bool false 2>/dev/null || true
-                    defaults write com.apple.Accessibility EnhancedBackgroundContrastEnabled -bool false 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
-                ;;
-            "DisableMouseKeys")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    # Reset both underlying settings to their default/expected enabled state
-                    defaults write com.apple.universalaccess useMouseKeysShortcutKeys -bool true 2>/dev/null || true
-                    defaults write com.apple.universalaccess mouseDriverIgnoreTrackpad -bool true 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
-                ;;
-            "ShrinkSideBarInTahoe")
-                defaults write com.apple.finder SidebarWidth2 -int 161 2>/dev/null || true
-                defaults write com.apple.finder FK_SidebarWidth2 -int 161 2>/dev/null || true
-                ;;
-            "ShrinkSideBarInSequoiaAndBelow")
-                defaults write com.apple.finder SidebarWidth -int 164 2>/dev/null || true
-                defaults write com.apple.finder FK_SidebarWidth -int 164 2>/dev/null || true
-                ;;
-            "Two_Finger_Tap_To_Right_Click_AND_Bottom_Right_Click")
-                defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadCornerSecondaryClick -int 0
-                defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadRightClick -bool false
-                defaults -currentHost write NSGlobalDomain com.apple.trackpad.trackpadCornerClickBehavior -int 0
-                defaults -currentHost write NSGlobalDomain com.apple.trackpad.enableSecondaryClick -bool false
-                defaults write com.apple.AppleMultitouchTrackpad TrackpadCornerSecondaryClick -int 0
-                defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool false
-                echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
-                ;;
-            "Show_Time_Machine_Menu_Bar_Item")
-                # Handle VPN Menu Bar item
-                # if [[ "$key" == "Show_VPN_Menu_Bar_Item" ]]; then
-                defaults delete com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.TimeMachine" 2>/dev/null
-                
-                # Find and remove VPN from menuExtras array
-                # for i in {0..10}; do
-                #     item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
-                #     if [[ $item == *"VPN"* ]]; then
-                #         /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                #         break
-                #     fi
-                # done
-                /usr/libexec/PlistBuddy -c "Delete :menuExtras: string '/System/Library/CoreServices/Menu Extras/TimeMachine.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null  
-                
-                # else
-                #     echo "⚠️ ${BO}Could not reset to default: VPN Menu Bar item.${NC}"
-                # fi
-                killall cfprefsd 2>/dev/null || true
-                ;;
-            "Show_VPN_Menu_Bar_Item")
-                # Handle VPN Menu Bar item
-                # if [[ "$key" == "Show_VPN_Menu_Bar_Item" ]]; then
-                defaults delete com.apple.systemuiserver "NSStatusItem Visible com.apple.menuextra.vpn" 2>/dev/null
-                
-                # Find and remove VPN from menuExtras array
-                # for i in {0..10}; do
-                #     item=$(/usr/libexec/PlistBuddy -c "Print :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null)
-                #     if [[ $item == *"VPN"* ]]; then
-                #         /usr/libexec/PlistBuddy -c "Delete :menuExtras:$i" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                #         break
-                #     fi
-                # done
-                /usr/libexec/PlistBuddy -c "Delete :menuExtras: string '/System/Library/CoreServices/Menu Extras/VPN.menu'" ~/Library/Preferences/com.apple.systemuiserver.plist 2>/dev/null
-                # else
-                #     echo "⚠️ ${BO}Could not reset to default: VPN Menu Bar item.${NC}"
-                # fi
-                killall cfprefsd 2>/dev/null || true
-                ;;
-            "DisableSpotlightRelatedContent")
-                # defaults write com.apple.Spotlight EnabledPreferenceRules -array
-                
-                # Read current array into a variable
-                current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-                
-                # Remove "Custom.relatedContents" by rebuilding array without it
-                items=$(echo "$current_array" | grep -o '"[^"]*"' | grep -v "Custom.relatedContents" | tr '\n' ' ')
-                if [[ -n "$items" ]]; then
-                    defaults write com.apple.Spotlight EnabledPreferenceRules -array $items
-                else
-                    defaults write com.apple.Spotlight EnabledPreferenceRules -array
-                fi
-                ;;
-            "ReduceSpotlightResultsInTahoe")
-                current_array=$(defaults read com.apple.Spotlight EnabledPreferenceRules 2>/dev/null)
-                
-                # Remove all app/system items but preserve Custom.relatedContents if present
-                if echo "$current_array" | grep -q "Custom.relatedContents"; then
-                    defaults write com.apple.Spotlight EnabledPreferenceRules -array "Custom.relatedContents"
-                else
-                    defaults write com.apple.Spotlight EnabledPreferenceRules -array
-                fi
-                ;;
-            "ReduceSpotlightResultsInSequoia")
-                # Reset to default by deleting the orderedItems key
-                defaults delete com.apple.Spotlight orderedItems 2>/dev/null || true
-                ;;
-            "Remote_Management_Menu_Bar")
-                # Only show warning if sudo credentials aren't cached
-                if ! sudo -n true 2>/dev/null; then
-                    echo "📝 This requires sudo privileges. Please type your admin password, then press enter."
-                fi
-                if sudo defaults write /Library/Preferences/com.apple.RemoteManagement.plist LoadRemoteManagementMenuExtra -bool false; then
-                    :
-                else
-                    echo "⚠️ ${BO}Could not reset Remote Management Menu Bar icon.${NC}"
-                fi
-                ;;
-            "DisableSendReadReceiptsIniMessage")
-                defaults write com.apple.imagent Setting.EnableReadReceipts -bool true
-                defaults write com.apple.imagent Setting.GlobalReadReceiptsVersionID -int 1
-                ;;
-            "DisableCertainShareExtensions")
-                # Handle Share Extensions
-                extensions=(
-                    "com.apple.share.System.add-to-safari-reading-list"
-                    # "com.apple.CloudSharingUI.CopyLink"    # keep as is
-                    "com.apple.Notes.SharingExtension"
-                    "com.apple.share.System.add-to-iphoto"
-                    "com.apple.reminders.sharingextension"
-                    "com.apple.iBooksX.SharingExtension"
-                    "com.apple.shortcuts.Run-Workflow"
-                    "com.apple.freeform.sharingextension"
-                    # "com.apple.CloudSharingUI.CreateiCloudLinkExtension"    # keep as is
-                )
-                # Enable each extension
-                for ext in "${extensions[@]}"; do
-                    # echo "Disabling: $ext"
-                    # pluginkit -e default -i "$ext"
-                    pluginkit -e use -i "$ext"
-                done
-                # Also enable Contact Suggestions via the plist
-                defaults write com.apple.Sharing SharingPeopleSuggestionsDisabled -bool false
-                # echo "Share extensions enabled successfully"
-                ;;
-            "UseBrightBoldInTerminal")
-                default_profile=$(defaults read com.apple.Terminal "Default Window Settings" 2>/dev/null)
-                startup_profile=$(defaults read com.apple.Terminal "Startup Window Settings" 2>/dev/null)
-                profiles_to_update=()
-                [[ -n "$default_profile" ]] && profiles_to_update+=("$default_profile")
-                [[ -n "$startup_profile" && "$startup_profile" != "$default_profile" ]] && profiles_to_update+=("$startup_profile")
-
-                if [[ "$reset_val" == "reset" ]]; then
-                    bool_val="false"
-                fi
-
-                failed=false
-                for profile in "${profiles_to_update[@]}"; do
-                    /usr/libexec/PlistBuddy -c "Set :'Window Settings':'$profile':UseBrightBold bool $bool_val" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null
-                    result=$(/usr/libexec/PlistBuddy -c "Print :'Window Settings':'$profile':UseBrightBold" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null)
-                    [[ "$result" != "$bool_val" ]] && failed=true
-                done
-
-                [[ "$failed" == "true" ]] && return 1
+                sleep 1
                 ;;
             "sudo")
                 if [[ "$key" == "schedule" ]]; then
@@ -10215,9 +11216,15 @@ function macos_preferences() {
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
                     # killall cfprefsd 2>/dev/null || true
                 fi
+                killall Finder 2>/dev/null || true
+                echo "${YE}Restarted Finder...${NC}"
+                ;;
+            "com.apple.bird")
                 killall Finder 2>/dev/null || true
                 echo "${YE}Restarted Finder...${NC}"
                 ;;
@@ -10226,8 +11233,9 @@ function macos_preferences() {
                 echo "${YE}Restarted SystemUIServer...${NC}"
                 ;;
             "com.apple.controlcenter")
-                if [[ "$key" == "Spotlight" ]]; then
+                if [[ "$domain" == "com.apple.Spotlight" ]]; then
                     killall Spotlight 2>/dev/null || true
+                    echo "${YE}Restarted Spotlight...${NC}"
                 # elif [[ "$key" == "Siri" ]]; then
                 #     killall Siri 2>/dev/null || true
                 # elif [[ "$key" == "Weather" ]]; then
@@ -10235,8 +11243,9 @@ function macos_preferences() {
                 #     killall WeatherMenu 2>/dev/null || true
                 fi
                 killall SystemUIServer 2>/dev/null || true
+                echo "${YE}Restarted SystemUIServer...${NC}"
                 killall ControlCenter 2>/dev/null || true
-                echo "${YE}Restarted Services...${NC}"
+                echo "${YE}Restarted ControlCenter...${NC}"
                 ;;
             "com.apple.WindowManager")
                 killall WindowManager 2>/dev/null || true
@@ -10244,74 +11253,64 @@ function macos_preferences() {
                 ;;
             "com.apple.menuextra.clock")
                 killall SystemUIServer 2>/dev/null || true
+                echo "${YE}Restarted SystemUIServer...${NC}"
                 killall ControlCenter 2>/dev/null || true
-                echo "${YE}Restarted ControlCenter & SystemUIServer...${NC}"
+                echo "${YE}Restarted ControlCenter...${NC}"
                 ;;
             "com.apple.Accessibility")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall UniversalAccessApp 2>/dev/null || true
-                    killall universalaccessd 2>/dev/null || true
-                    if [[ "$handler" == "ReduceMotion" ]]; then
-                        killall Spotlight 2>/dev/null || true
-                        killall corespotlightd 2>/dev/null || true
-                        killall spotlightknowledged 2>/dev/null || true
-                        killall SystemUIServer 2>/dev/null || true
-                        killall ControlCenter 2>/dev/null || true
-                        killall WindowServer 2>/dev/null || true
-                        killall Dock 2>/dev/null || true
-                        killall cfprefsd 2>/dev/null || true
-                    fi
-                    # echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
+                killall UniversalAccessApp 2>/dev/null || true
+                killall universalaccessd 2>/dev/null || true
+                if [[ "$handler" == "ReduceMotion" ]]; then
+                    killall Spotlight 2>/dev/null || true
+                    killall corespotlightd 2>/dev/null || true
+                    killall spotlightknowledged 2>/dev/null || true
+                    killall SystemUIServer 2>/dev/null || true
+                    killall ControlCenter 2>/dev/null || true
+                    killall WindowServer 2>/dev/null || true
+                    killall Dock 2>/dev/null || true
+                    killall cfprefsd 2>/dev/null || true
                 fi
+                echo "${YE}Restarted Services...${NC}"
+                # echo "👤 ${BO}Note: Please log out for this to take effect.${NC}"
                 ;;
             "com.apple.universalaccess")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall UniversalAccessApp 2>/dev/null || true
-                    killall universalaccessd 2>/dev/null || true
-                    # killall UniversalAccessAuthWarning 2>/dev/null || true
-                    # killall "System Preferences" 2>/dev/null
-                    if [[ "$handler" == "ReduceTransparency" ]]; then
-                        killall Dock 2>/dev/null || true
-                        killall SystemUIServer 2>/dev/null || true
-                        killall ControlCenter 2>/dev/null || true
-                        killall Finder 2>/dev/null || true
-                        killall cfprefsd 2>/dev/null || true
-                    fi
-                    echo "${YE}Restarted Services...${NC}"
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
+                killall UniversalAccessApp 2>/dev/null || true
+                killall universalaccessd 2>/dev/null || true
+                # killall UniversalAccessAuthWarning 2>/dev/null || true
+                # killall "System Preferences" 2>/dev/null
+                if [[ "$handler" == "ReduceTransparency" ]]; then
+                    killall Dock 2>/dev/null || true
+                    killall SystemUIServer 2>/dev/null || true
+                    killall ControlCenter 2>/dev/null || true
+                    killall Finder 2>/dev/null || true
+                    killall cfprefsd 2>/dev/null || true
                 fi
+                echo "${YE}Restarted Services...${NC}"
                 ;;
             "com.apple.systemuiserver")
                 # killall ControlCenter 2>/dev/null || true
                 killall SystemUIServer 2>/dev/null || true
                 ;;
             "com.apple.universalcontrol")
+                if [[ "$key" == "Spotlight" ]]; then
+                    killall Spotlight 2>/dev/null || true
+                    echo "${YE}Restarted Spotlight...${NC}"
+                fi
                 killall SystemUIServer 2>/dev/null || true
+                echo "${YE}Restarted SystemUIServer...${NC}"
                 killall ControlCenter 2>/dev/null || true
-                echo "${YE}Restarted ControlCenter & SystemUIServer...${NC}"
+                echo "${YE}Restarted ControlCenter...${NC}"
                 ;;
             "NSGlobalDomain")
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall Finder 2>/dev/null || true
+                    echo "${YE}Restarted Finder...${NC}"
                     killall SystemUIServer 2>/dev/null || true
-                    echo "${YE}Restarted Services...${NC}"
+                    echo "${YE}Restarted SystemUIServer...${NC}"
+                    # killall cfprefsd 2>/dev/null || true 
                 else
                     killall SystemUIServer 2>/dev/null || true
                     echo "${YE}Restarted SystemUIServer...${NC}"
@@ -10322,85 +11321,68 @@ function macos_preferences() {
                 echo "${YE}Restarted Spotlight...${NC}"
                 ;;
             "com.apple.Safari")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall Safari 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to read/write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall Safari 2>/dev/null || true
+                echo "${YE}Restarted Safari...${NC}"
                 ;;
             "com.apple.MobileSMS")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall Messages 2>/dev/null || true
-                    killall imagent 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall Messages 2>/dev/null || true
+                echo "${YE}Restarted Messages...${NC}"
+                killall imagent 2>/dev/null || true
+                echo "${YE}Restarted imagent...${NC}"
                 ;;
             "com.apple.imagent")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall Messages 2>/dev/null || true
-                    killall imagent 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall Messages 2>/dev/null || true
+                echo "${YE}Restarted Messages...${NC}"
+                killall imagent 2>/dev/null || true
+                echo "${YE}Restarted imagent...${NC}"
                 ;;
             "com.apple.Passwords")
                 killall Passwords 2>/dev/null || true
+                echo "${YE}Restarted Passwords...${NC}"
                 killall PasswordsMenuBarExtra 2>/dev/null || true
+                echo "${YE}Restarted PasswordsMenuBarExtra...${NC}"
+                ;;
+            "com.apple.TextEdit")
+                if [[ "$handler" == "KeyboardShortcuts" ]]; then
+                    killall UniversalAccessApp 2>/dev/null || true
+                    killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
+                    killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
+                    # killall cfprefsd 2>/dev/null || true
+                fi
+                killall TextEdit 2>/dev/null || true
+                echo "${YE}Restarted TextEdit...${NC}"
                 ;;
             "com.apple.SocialLayer")
-                    killall sociallayerd 2>/dev/null || true
+                killall sociallayerd 2>/dev/null || true
+                echo "${YE}Restarted SocialLayer...${NC}"
                 ;;
             "com.apple.archiveutility")
-                if [[ "$full_disk_access" == "true" ]]; then
-                    killall "Archive Utility" 2>/dev/null || true
-                else
-                    echo
-                    echo "⚠️  ${BO}${YE}Warning: ${NC}Terminal does not have full disk access to read/write these prefs...${NC}"
-                    read -r -t 2 -n 1
-                    echo "   Please return to the macOS Preferences main menu to grant Terminal permission"
-                    echo
-                    read -r -t 2 -n 1
-                    return 1
-                fi
+                killall "Archive Utility" 2>/dev/null || true
+                echo "${YE}Restarted Archive Utility...${NC}"
                 ;;
             "com.apple.Preview")
                 if [[ "$handler" == "KeyboardShortcuts" ]]; then
                     killall UniversalAccessApp 2>/dev/null || true
                     killall universalaccessd 2>/dev/null || true
+                    echo "${YE}Restarted UniversalAccess...${NC}"
                     killall SystemUIServer 2>/dev/null || true
+                    echo "${YE}Restarted SystemUIServer...${NC}"
                 fi
                 killall Preview 2>/dev/null || true
                 echo "${YE}Restarted Preview...${NC}"
                 ;;
             "com.apple.Terminal")
                 echo "${BO}Please quit Terminal.app for changes to take effect...${NC}"
-                read -r -t 2 -n 1
+                read -r -t 1 -n 1
                 # killall Terminal 2>/dev/null || true
                 # echo "${YE}Restarted Terminal...${NC}"
                 ;;
         esac
         
         # echo "${GR}✅ Reset back to default${NC}"
-        sleep 0.5
+        # sleep 0.5
     }
 
     # Loop 1 - Show Info
@@ -10410,36 +11392,28 @@ function macos_preferences() {
         clear
         display_macos_preferences_header
         echo "${GR}"
-        echo_centered "This tool allows you to view & change over 260+ macOS preferences!"
-        echo_centered "Some of which can only be done using the Terminal."
+        echo_centered "This function allows you to view & change over 260 macOS preferences!"
+        echo_centered "Some of which can only be done using terminal commands."
         echo "${NC}"
         echo_centered "Simply choose a category > preference > action."
         echo_centered "Actions include ${GR}Activate${NC}, ${RE}Deactivate${NC} or ${GY}Reset to Default${NC}"
-        echo
-        echo_centered "Special navigation controls also allow for skipping back or forward"
-        echo_centered "through preferences & categories by using the A/Z keys"
+        echo "${GR}"
+        echo_centered "Preferences that are incompatible with your system will be${NC} ${GY}greyed out${NC}${GR}."
+        echo_centered "These can also be hidden via Settings > Manage Preferences > 'Hide incompatible prefs...'"
+        # echo "${NC}${GR}"
+        # echo_centered "You can also skip back or forward through preferences & categories"
+        # echo_centered "by using the${NC} ${BL}A${NC}${GR} or ${BL}Z${NC} ${GR}keys${NC}"
         echo "${NC}"
         echo_centered "${BO}For best results, please QUIT all other open applications${NC}"
+        # echo
+        echo_centered "───────────────────────────────────────────────────────────────────────────────────" 
+        echo_centered "${YE}Note:${NC} ${YE}Terminal may request access to other apps to check current preference states.${NC}"
+        echo_centered "${GY}This is required to display the current states of the following apps:${NC}"
+        echo_centered "${BO}Music, Preview, QuickTime & TextEdit${NC}"
         echo
-        if [[ "$DisableTerminalResizing_Horizonal" == "true" ]]; then
-            echo "──────────────────────────────────────────────────────────────────────────────────────" 
-            echo "⚠️  ${YE}Note:${NC} ${YE}Terminal may request access to other apps to check current preference states.${NC}"
-            echo "${GY}This is required to display the current states of these apps:${NC}"
-            echo "${BO}Music, Preview, QuickTime & TextEdit${NC}"
-            echo
-            echo "${GY}Additionally, Terminal requires Full Disk Access to read/write preferences for:${NC}"
-            echo "${BO}Accessibility, Archive Utility, Messages & Safari${NC}"
-            echo "──────────────────────────────────────────────────────────────────────────────────────"
-        else
-            echo "            ──────────────────────────────────────────────────────────────────────────────────────" 
-            echo "            ⚠️  ${YE}Note:${NC} ${YE}Terminal may request access to other apps to check current preference states.${NC}"
-            echo "            ${GY}This is required to display the current states of these apps:${NC}"
-            echo "            ${BO}Music, Preview, QuickTime & TextEdit${NC}"
-            echo
-            echo "            ${GY}Additionally, Terminal requires Full Disk Access to read/write preferences for:${NC}"
-            echo "            ${BO}Accessibility, Archive Utility, Messages & Safari${NC}"
-            echo "            ──────────────────────────────────────────────────────────────────────────────────────"
-        fi
+        echo_centered "${GY}Additionally, Terminal requires Full Disk Access to read/write preferences for:${NC}"
+        echo_centered "${BO}Accessibility, Archive Utility, Messages & Safari${NC}"
+        echo_centered "───────────────────────────────────────────────────────────────────────────────────"
         echo_centered "${GY}Some changes may require logging out or restarting to take effect.${NC}"
         # show_nav_prompt_for_categories_centered
         show_nav_prompt_with_AZ_centered
@@ -10476,7 +11450,6 @@ function macos_preferences() {
                 display_macos_preferences_header
                 echo
                 echo_centered "⚠️  ${BO}${YE}Full Disk Access not granted.${NC}"    
-                # echo_centered "⚠️  ${YE}Terminal requires full disk access to read/write some prefs...${NC}"
                 echo
                 echo_centered "${GY}This is required to read/write some preferences.${NC}"
                 echo
@@ -10486,7 +11459,11 @@ function macos_preferences() {
                 echo_centered "${BO}Choose an option:${NC}"
                 echo
                 echo_centered "1) ${GR}Yes${NC} (Open System Settings for me)"
-                echo "                                     2) ${RE}No${NC}  (Continue anyway)"
+                if [[ "$DisableTerminalResizing_Horizonal" == "true" ]]; then
+                    echo "2) ${RE}No${NC}  (Continue anyway)"
+                else
+                    echo "                                     2) ${RE}No${NC}  (Continue anyway)"
+                fi
                 echo
                 show_nav_prompt_with_AZ_centered
                 echo_n_centered "➡️  ${GR}Select 1 or 2 (or ${BL}nav${NC} ${GR}choice):${NC} "
@@ -10589,8 +11566,8 @@ function macos_preferences() {
             clear
             # full_disk_access=$(test -r "$HOME/Library/Mail" > /dev/null 2>&1 && echo "true" || echo "false")
             display_macos_preferences_header
+            # echo_centered "$system_info_for_display"
             echo
-            # echo "${BO}Select a preference category:${NC}"
             echo_centered "${BO}Select a preference category:${NC}"
             echo
             # Total number of category menu items (including "Show All" option)
@@ -10627,7 +11604,7 @@ function macos_preferences() {
                     21) echo "22) 🔍 ${CY}Spotlight${NC}" ;;
                     22) echo "23) 🔄 ${CY}Automatic Updates${NC}" ;;
                     23) echo "24) 🤖 ${CY}Apple Intelligence${NC}" ;;
-                    24) echo "25) 🔑 ${CY}Passwords${NC}" ;;
+                    24) echo "25) 🔑 ${CY}Passwords & AutoFill${NC}" ;;
                     25) echo "26) 📝 ${CY}TextEdit${NC}" ;;
                     26) echo "27) 👾 ${CY}Terminal${NC}" ;;
                     27) echo "28) 📅 ${CY}Calendar${NC}" ;;
@@ -10734,7 +11711,7 @@ function macos_preferences() {
                     preference_commands=("${original_preference_commands_full[@]}")
                     use_caching=true
                     # Continue to display loop below
-                ;;
+                    ;;
                 1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41)
                     # Filter preferences by category - skip caching for faster display
                     preference_commands=()
@@ -10743,9 +11720,8 @@ function macos_preferences() {
                     done < <(filter_preferences_by_category "$cat_choice")
                     use_caching=false
                     # Continue to display loop below
-                ;;
+                    ;;
                 *) 
-                    echo
                     echo_n_centered "❌ ${RE}Invalid choice.${NC} Please try again. "
                     read -r -t 1 -n 1
                     continue
@@ -10799,8 +11775,11 @@ function macos_preferences() {
                     echo "${GR}══════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                     echo_justified "↩ Preference Categories" "Show All Preferences [Cached Display] ↪${NC}" "110"
                     echo
-                    # Display all preferences with current state
-                    echo "${GR}Available preferences:${NC}"
+                    if [[ "$HideIncompatible_macOS_Preferences" == "true" ]]; then
+                        echo "${GR}Available preferences:${NC}                ${GY}[Incompatible preferences hidden]${NC}"
+                    else
+                        echo "${GR}Available preferences:${NC}"
+                    fi
                 else
                     trap - SIGINT
                     interrupted=false
@@ -10838,9 +11817,12 @@ function macos_preferences() {
                     fi
                     echo "${GR}══════════════════════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                     echo "↩ Preference categories       ${CY}Legend: ✅ ${GR}Active${NC} | ❌ ${RE}Inactive${NC} | ❔ ${GY}Default/Not Set${NC}        Preference Actions ↪"
-
                     echo
-                    echo "${GR}Available preferences:${NC}"
+                    if [[ "$HideIncompatible_macOS_Preferences" == "true" ]]; then
+                        echo "${GR}Available preferences:${NC}                ${GY}[Incompatible preferences hidden]${NC}"
+                    else
+                        echo "${GR}Available preferences:${NC}"
+                    fi
                 fi
 
                 local i=1
@@ -11251,50 +12233,51 @@ function macos_preferences() {
                                     if apply_preference_change "$domain" "$key" "$active_val" "$handler" "active"; then
                                         echo "✅ ${GR}Preference activated successfully!${NC}"
                                         echo "🔄 Refreshing state..."
+                                        read -r -t 1 -n 1
                                     else
-                                        echo "❌ ${RE}Failed to activate preference.${NC}"
                                         if [[ "$handler" == "UseBrightBoldInTerminal" ]]; then
-                                            read -r -t 1 -n 1
-                                            echo "   ${YE}This cannot be activated from here unfortunately${NC}"
-                                            read -r -t 1 -n 1
+                                            echo "❌ ${RE}Failed to activate preference.${NC}"
+                                            echo "   ${YE}This cannot be activated while Terminal is in use.${NC}"
                                             echo "   ${YE}Please toggle on manually${NC}"
-                                            read -r -t 1 -n 1
+                                            read -r -t 3 -n 1
                                         else
+                                            echo "❌ ${RE}Failed to activate preference.${NC}"
                                             echo "   Please try again..."
+                                            read -r -t 1 -n 1
                                         fi
                                     fi
-                                    read -r -t 1 -n 1
                                     break
                                     ;;
                                 2)
                                     if apply_preference_change "$domain" "$key" "$inactive_val" "$handler" "inactive"; then
                                         echo "✅ ${GR}Preference deactivated successfully!${NC}"
                                         echo "🔄 Refreshing state..."
+                                        read -r -t 1 -n 1
                                     else
                                         echo "❌ ${RE}Failed to deactivate preference.${NC}"
                                         echo "   Please try again..."
+                                        read -r -t 1 -n 1
                                     fi
-                                    read -r -t 1 -n 1
                                     break
                                     ;;
                                 3)
                                     if [[ -n "$reset_val" ]]; then
                                         if reset_preference_to_default "$domain" "$key" "$reset_val" "$handler"; then
-                                            echo "✅ ${GR}Preference reset to default successfully!${NC}"
+                                            echo "✅ ${GR}Preference reset successfully!${NC}"
                                             echo "🔄 Refreshing state..."
+                                            read -r -t 1 -n 1
                                         else
                                             echo "❌ ${RE}Failed to reset preference.${NC}"
                                             echo "   Please try again..."
+                                            read -r -t 1 -n 1
                                         fi
-                                        read -r -t 1 -n 1
-                                        break
                                     else
-                                        echo -n "❌ ${RE}Reset not available for this preference.${NC} "
+                                        echo -n "❌ ${BO}Reset not available for this preference.${NC} "
                                         read -r -t 1 -n 1
-                                        break
                                     fi
+                                    break
                                     ;;
-                                a)
+                                a|A)
                                     # Navigate to previous preference (global, group-aware, with wrap)
                                     if [[ ${#global_pref_indices[@]} -eq 0 ]] || [[ $global_pref_choice_index -lt 0 ]]; then
                                         echo -n "❌ ${RE}Navigation is unavailable for this preference.${NC} "
@@ -11349,7 +12332,7 @@ function macos_preferences() {
                                     choice=$((global_pref_choice_index + 1))
                                     break  # Refresh Loop 5 with new preference
                                     ;;
-                                z)
+                                z|Z)
                                     # Navigate to next preference (global, group-aware, with wrap)
                                     if [[ ${#global_pref_indices[@]} -eq 0 ]] || [[ $global_pref_choice_index -lt 0 ]]; then
                                         echo -n "❌ ${RE}Navigation is unavailable for this preference.${NC} "
@@ -11431,6 +12414,8 @@ function command_center() {
         echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
         echo_justified "↩ Main Menu" "TBD ↪"
         show_nav_prompt_with_AZ_centered
+        echo_centered "$system_info_for_display"
+        echo
         echo "${BO}Choose an option:${NC}"
         echo " 1) 🛠️  ${GR}Settings${NC}"
         echo " 2) 🛣️  ${GR}Path Picker${NC}"
@@ -11835,10 +12820,10 @@ function command_center() {
                 came_from_command_center_path_picker=true
                 if [[ -n "$_sudo_keepalive_pid" ]]; then
                     disable_sudo_keepalive
-                    echo -n "🔓 ${GY}Sudo keep-alive disabled.${NC} "
+                    echo -n "🔒 ${GY}Sudo keep-alive disabled.${NC} "
                 else
                     if enable_sudo_keepalive; then
-                        echo -n "🔐 ${GR}Sudo keep-alive enabled.${NC} "
+                        echo -n "🔓 ${GR}Sudo keep-alive enabled.${NC} "
                     else
                         echo -n "❌ ${RE}Authentication failed.${NC} "
                     fi
@@ -11876,6 +12861,8 @@ quick_settings() {
                 echo
                 echo_centered "${BL}⮑ ${NC} Continue | ${BL}A${NC} Previous | ${BL}Z${NC} Next | ${BL}B/Q/^C${NC} Exit Quick Settings"
                 echo
+                echo_centered "$system_info_for_display"
+                echo
                 if [[ "$DisableWelcomeText_QuickMenus" == "false" ]]; then
                     echo_centered "${GR}Welcome to Quick Settings${NC}"
                     echo
@@ -11889,18 +12876,24 @@ quick_settings() {
                 echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                 echo_justified "↩ Main Menu" "TBD ↪"
                 show_nav_prompt_with_AZ_for_settings_centered
+                echo_centered "$system_info_for_display"
+                echo
             elif [[ "$came_from_command_center_settings" == "true" ]]; then
                 echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                 echo_justified "${BO}🛠️  Settings${NC}" "${GY}(Use A/Z to cycle between options 1-3)${NC}" "96"
                 echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                 echo_justified "↩ Home [Command Center]" "TBD ↪"
                 show_nav_prompt_with_AZ_for_settings_centered
+                echo_centered "$system_info_for_display"
+                echo
             else # came from somewhere else
                 echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                 echo_justified "${BO}🛠️  Settings${NC}" "" "96"
                 echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
                 echo_justified "↩ Home" "TBD ↪"
                 show_nav_prompt_with_AZ_for_settings_centered
+                echo_centered "$system_info_for_display"
+                echo
             fi
             echo "${BO}Choose an option:${NC}"
             echo " 1) 🔧 ${GR}Manage Preferences${NC} ($(_count_saved_prefs) Set)"
@@ -11948,7 +12941,11 @@ quick_settings() {
                     trap - SIGINT
                     interrupted=false
                     trap 'echo; echo -n "🛑 ${RE}Interrupted.${NC} Press Enter to go back: "; interrupted=true; continue 2' SIGINT
-                    resize_terminal 95 36
+                    if [[ "$DisableTerminalResizing_Vertical" == "false" ]]; then
+                        resize_terminal 95 37
+                    else
+                        resize_terminal 95
+                    fi
                     clear
                     if [[ "$used_keyboard_shortcut_s" == "true" ]]; then
                         echo "${GR}═══════════════════════════════════════════════════════════════════════════════════════════════${NC}"
@@ -12017,8 +13014,9 @@ quick_settings() {
                     _show_pref_row_as_choices "SudoKeepAliveOnStartUp" "Enable At Startup" "11"
                     echo "${GR}Miscellaneous:${NC}"
                     _show_pref_row_as_choices "DisableWelcomeText_QuickMenus" "Disable Welcome text in Quick Menus" "12"
+                    _show_pref_row_as_choices "HideIncompatible_macOS_Preferences" "Hide incompatible prefs in macOS Preferences" "13"
                     echo
-                    echo "13) ${RE}Reset All To Default${NC}"
+                    echo "14) ${RE}Reset All To Default${NC}"
                     # Future pref groups just add a heading + rows here
 
                     # When adding future preference groups (non-dontaskagain ones),
@@ -12114,6 +13112,11 @@ quick_settings() {
                             _toggle_pref "DisableWelcomeText_QuickMenus"
                             ;;
                         13)
+                            _toggle_pref "HideIncompatible_macOS_Preferences"
+                            echo -n "   ${YE}Note: Must leave macOS Preferences for this to take effect...${NC} "
+                            read -r -t 3 -n 1
+                            ;;
+                        14)
                             trap - SIGINT
                             trap 'echo; echo -n "🛑 ${RE}Interrupted.${NC} Press Enter to go back: "; interrupted=true; continue' SIGINT
                             echo "───────────────────────────────────────────────────────────────────────────────────────────────"
@@ -12404,7 +13407,7 @@ quick_settings() {
                     _show_pref_row_for_display "SudoKeepAliveOnStartUp" "Enable At Startup"
                     echo "${GR}Miscellaneous:${NC}"
                     _show_pref_row_for_display "DisableWelcomeText_QuickMenus" "Disable Welcome text in Quick Menus"
-
+                    _show_pref_row_for_display "HideIncompatible_macOS_Preferences" "Hide incompatible prefs in macOS Preferences"
 
                     # Future pref groups just add a heading + rows here
 
@@ -12514,10 +13517,10 @@ quick_settings() {
             5)
                 if [[ -n "$_sudo_keepalive_pid" ]]; then
                     disable_sudo_keepalive
-                    echo -n "🔓 ${GY}Sudo keep-alive disabled.${NC} "
+                    echo -n "🔒 ${GY}Sudo keep-alive disabled.${NC} "
                 else
                     if enable_sudo_keepalive; then
-                        echo -n "🔐 ${GR}Sudo keep-alive enabled.${NC} "
+                        echo -n "🔓 ${GR}Sudo keep-alive enabled.${NC} "
                     else
                         echo -n "❌ ${RE}Authentication failed.${NC} "
                     fi
@@ -12589,7 +13592,7 @@ main() {
 }
 show_help() {
     {
-        display_OneCommand_header_for_80px
+        display_OneCommand_header_for_95px
         echo_centered "${BP}Usage: OneCommand.command [choice]${BP}"
         echo
         echo_centered "  ${GR}Skip the main menu and jump directly to a task.${NC}"
@@ -12645,7 +13648,7 @@ if ! sudo -n true 2>/dev/null; then
     if [[ "$SudoKeepAliveOnStartUp" == "true" ]]; then
         resize_terminal 95 24
         clear
-        display_OneCommand_header_for_80px
+        display_OneCommand_header_for_95px
         echo
         echo_centered "🔐 ${GR}Sudo Keep-Alive On Startup is enabled.${NC}"
         echo
