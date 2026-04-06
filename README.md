@@ -3,11 +3,11 @@ OneCommand
 </h1>
 
 <div align="center">
-	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/5a6bd626-91d0-4fd2-8eaf-133035b73524" />
+	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/9488b5d9-3fee-4a40-86b6-93a454f0dc13" />
 </div>
 
 <div align="center">
-	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_(Lite)" src="https://github.com/user-attachments/assets/6e4b5a46-40d0-4d2e-84d3-078f4243802e" />
+	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_(Lite)" src="https://github.com/user-attachments/assets/2978e35c-961f-41fe-b75d-52de51f4804b" />
 </div>
 
 <hr>
