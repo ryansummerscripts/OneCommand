@@ -6,6 +6,10 @@ OneCommand
 	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/9488b5d9-3fee-4a40-86b6-93a454f0dc13" />
 </div>
 
+<h1 align="center">
+OneCommand (Lite)
+</h1>
+
 <div align="center">
 	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_(Lite)" src="https://github.com/user-attachments/assets/2978e35c-961f-41fe-b75d-52de51f4804b" />
 </div>
@@ -41,7 +45,7 @@ Tested on:
 </p>
 
 <p align="center">
-✅ macOS Monterey 12 through Tahoe 26.4<br>✅ Intel &amp; Apple Silicon<br>
+✅ macOS Monterey 12 through Tahoe 26.5<br>✅ Intel &amp; Apple Silicon<br>
 </p>
 
 <p align="center">
