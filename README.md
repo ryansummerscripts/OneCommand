@@ -33,7 +33,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<br>v2.1.2 (Lite)<br>SHA-256: 6dd08dbcc77865cf10acbba90bce321a53a397a7646219e61c0d9a26ca3429d3
+<br>v2.1.2 (Lite)<br>SHA-256: 8771531356f55f590d701052eade55bcd980671e17e1c027b03e9942cf08d6fd
 </p>
 
 <p align="center">
