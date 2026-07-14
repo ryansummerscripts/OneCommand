@@ -3,7 +3,7 @@ OneCommand
 </h1>
 
 <div align="center">
-	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/9488b5d9-3fee-4a40-86b6-93a454f0dc13" />
+	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/11843ada-43b7-468e-b67b-6f32ecc0ac8a" />
 </div>
 
 <h1 align="center">
@@ -11,7 +11,7 @@ OneCommand (Lite)
 </h1>
 
 <div align="center">
-	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_(Lite)" src="https://github.com/user-attachments/assets/2978e35c-961f-41fe-b75d-52de51f4804b" />
+	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_(Lite)" src="https://github.com/user-attachments/assets/604908d8-9a52-48fd-9cec-1ede06e5e99c" />
 </div>
 
 <hr>
@@ -25,7 +25,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<strong>Latest Versions:</strong><br>v2.1.1 (Full)<br>SHA-256: 0e3e775034360cdd2e82c54002b57915dffe57874bab2d751e57a0ef59a337c6
+<strong>Latest Versions:</strong><br>v2.1.2 (Full)<br>SHA-256: 8f45b54b146143984476014b3c021c582a7ae0b6ec096dfd9afa64fa0b9a4920
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<br>v2.1.1 (Lite)<br>SHA-256: d2871d0e305e6eb47a72fd63e828f4dbb2308f547e0b267b0580adacef7e5c00
+<br>v2.1.2 (Lite)<br>SHA-256: 6dd08dbcc77865cf10acbba90bce321a53a397a7646219e61c0d9a26ca3429d3
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@ Tested on:
 </p>
 
 <p align="center">
-✅ macOS Monterey 12 through Tahoe 26.5<br>✅ Intel &amp; Apple Silicon<br>
+✅ macOS Monterey 12 through Tahoe 26.5.2<br>✅ Intel &amp; Apple Silicon<br>
 </p>
 
 <p align="center">
