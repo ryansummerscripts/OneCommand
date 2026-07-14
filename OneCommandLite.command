@@ -13100,10 +13100,12 @@ quick_settings() {
                         10)
                             if [[ -n "$_sudo_keepalive_pid" ]]; then
                                 disable_sudo_keepalive
-                                echo -n "🔓 ${GY}Sudo keep-alive disabled.${NC} "
+                                echo -n "🔒 ${GY}Sudo keep-alive disabled.${NC} "
                             else
                                 enable_sudo_keepalive
+                                echo -n "🔓 ${GR}Sudo keep-alive enabled.${NC} "
                             fi
+                            read -r -t 1 -n 1
                             ;;
                         11)
                             _toggle_pref "SudoKeepAliveOnStartUp"
