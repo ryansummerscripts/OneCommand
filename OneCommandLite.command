@@ -4,7 +4,7 @@
 # | (_) | ' \/ -_) (__/ _ \ '  \| '  \/ _` | ' \/ _` |
 #  \___/|_||_\___|\___\___/_|_|_|_|_|_\__,_|_||_\__,_|
 #
-# Version: 2.1.1 (Lite)
+# Version: 2.1.2 (Lite)
 # by Ryan Summer
 # https://shop.ryansummer.com/p/onecommand
 
@@ -563,7 +563,7 @@ display_OneCommand_header_for_95px() {
                       \___/|_||_\___|\___\___/_|_|_|_|_|_\__,_|_||_\__,_|
 EOF
     echo -n "${NC}"
-    echo "                   ${BL}Created by Ryan Summer${NC} | ${BL}For macOS 12-26${NC} | ${BL}v2.1.1 (Lite)${NC}"
+    echo "                   ${BL}Created by Ryan Summer${NC} | ${BL}For macOS 12-26${NC} | ${BL}v2.1.2 (Lite)${NC}"
     echo
 }
 display_macos_preferences_header() {
@@ -5925,7 +5925,7 @@ function disk_image_utility () {
                 done
             done
         else
-            echo "❌ ${RE}Invalid choice.${NC} "
+            echo -n "❌ ${RE}Invalid choice.${NC} "
             read -r -t 1 -n 1
             continue
         fi
@@ -6577,7 +6577,7 @@ function macos_preferences() {
             # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
             "GROUP|🖱️  [Mouse]|"
             "🚫 Disable Natural Scrolling ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|com.apple.swipescrolldirection|false|true|true|writeResetValue|"
-            "🚀 Increase Tracking Speed beyond fastest setting ${BO}(Requires Restart)${NC}|NSGlobalDomain|com.apple.mouse.scaling|4|5|3.0|writeResetValue|"
+            "🚀 Increase Tracking Speed beyond fastest setting ${BO}(Requires Restart)${NC}|NSGlobalDomain|com.apple.mouse.scaling|5|4|3.0|writeResetValue|"
             "🖱️  Enable secondary button (on bluetooth multi-touch mice)|com.apple.driver.AppleBluetoothMultitouch.mouse|MouseButtonMode|TwoButton|OneButton|OneButton|writeResetValue|"
             "🚫 Disable 'Shake mouse pointer to locate' ${BO}(Requires Logging Out)${NC}|NSGlobalDomain|CGDisableCursorLocationMagnification|true|false|true|writeResetValue|"
             "🚫 Disable the 'Mouse Keys' keyboard shortcut ${BO}(FDA req. to write changes)${NC}|com.apple.universalaccess|useMouseKeysShortcutKeys|true|false|true|DisableMouseKeys|${GY}Prevents 'Mouse Keys' from getting triggered when pressing the option key 5 times in a row.${NC}"
@@ -6611,7 +6611,7 @@ function macos_preferences() {
             # Prefs.: "Display Name|Domain|Key|Active Value|Inactive Value|Reset Value|Handler|Notes"
             "GROUP|⌨️  [Keyboard]|"
             # "💨 Speed Up Initial Key Repeat Rate ${BO}(Requires logging out)${NC}|NSGlobalDomain|KeyRepeat|2|6|6|writeResetValue|${GY}Speeds up the repeat of pressed keys.${NC}"
-            "💨 Increase Initial Key Repeat Rate beyond fastest setting ${BO}(Requires logging out)${NC}|NSGlobalDomain|KeyRepeat|1.5|2|6|writeResetValue|${GY}Speeds up the repeat of pressed keys. (A rate of '2' is the fastest setting in System Settings)${NC} "
+            "💨 Increase Initial Key Repeat Rate beyond fastest setting ${BO}(Requires logging out)${NC}|NSGlobalDomain|KeyRepeat|1|2|6|writeResetValue|${GY}Speeds up the repeat of pressed keys. (A rate of '2' is the fastest setting in System Settings)${NC} "
             # "💨 Speed Up Delay Until Key Repeat ${BO}(Requires logging out)${NC}|NSGlobalDomain|InitialKeyRepeat|15|25|25|writeResetValue|${GY}Speeds up the delay until pressed keys are repeated.${NC}"
             "💨 Increase Delay Until Key Repeat beyond fastest setting ${BO}(Requires logging out)${NC}|NSGlobalDomain|InitialKeyRepeat|13|15|25|writeResetValue|${GY}Speeds up the delay until pressed keys are repeated. (A rate of '15' is the shortest setting in System Settings)${NC}"
             "↔️  Allow tab navigation across UI|NSGlobalDomain|AppleKeyboardUIMode|2|0|2|writeResetValue|${GY}Enables full keyboard access for all UI controls${NC}"
@@ -12040,7 +12040,7 @@ function macos_preferences() {
                             if   [[ $nav -eq $NAV_QUIT ]]; then
                                 return
                             elif [[ $nav -eq $NAV_BACK ]]; then
-                                break
+                                break 2
                             elif [[ $nav -eq $NAV_REFRESH ]]; then 
                                 continue
                             fi
@@ -13113,8 +13113,10 @@ quick_settings() {
                             ;;
                         13)
                             _toggle_pref "HideIncompatible_macOS_Preferences"
-                            echo -n "   ${YE}Note: Must leave macOS Preferences for this to take effect...${NC} "
-                            read -r -t 3 -n 1
+                            if [[ "$main_menu_choice" == "7" ]]; then
+                                echo -n "   ${YE}Note: Must leave macOS Preferences for this to take effect...${NC} "
+                                read -r -t 3 -n 1
+                            fi
                             ;;
                         14)
                             trap - SIGINT
