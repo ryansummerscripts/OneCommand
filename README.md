@@ -45,7 +45,7 @@ Tested on:
 </p>
 
 <p align="center">
-✅ macOS Monterey 12 through Tahoe 26.5.2<br>✅ Intel &amp; Apple Silicon<br>
+✅ macOS Monterey 12 through Tahoe 26.6<br>✅ Intel &amp; Apple Silicon<br>
 </p>
 
 <p align="center">
