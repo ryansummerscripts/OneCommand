@@ -2,6 +2,10 @@
 OneCommand
 </h1>
 
+<p align="center">
+<strong>[macOS 27 Beta testing is underway!]</strong>
+</p>
+
 <div align="center">
 	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/11843ada-43b7-468e-b67b-6f32ecc0ac8a" />
 </div>
