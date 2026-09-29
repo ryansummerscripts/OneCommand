@@ -2,12 +2,8 @@
 OneCommand
 </h1>
 
-<p align="center">
-<strong>[macOS 27 Beta testing is underway!]</strong>
-</p>
-
 <div align="center">
-	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_" src="https://github.com/user-attachments/assets/11843ada-43b7-468e-b67b-6f32ecc0ac8a" />
+	<img width="892" height="480" alt="OneCommand" src="https://github.com/user-attachments/assets/b6ad7434-e9e3-4b57-9f10-3427eb648bf9" />
 </div>
 
 <h1 align="center">
@@ -15,7 +11,7 @@ OneCommand (Lite)
 </h1>
 
 <div align="center">
-	<img width="892" height="480" alt="_OneCommand_01_Main_Menu_(Lite)" src="https://github.com/user-attachments/assets/604908d8-9a52-48fd-9cec-1ede06e5e99c" />
+	<img width="892" height="480" alt="OneCommandLite" src="https://github.com/user-attachments/assets/3cf33c26-6a2d-47ec-9aef-cb27786a1a39" />
 </div>
 
 <hr>
@@ -29,7 +25,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<strong>Latest Versions:</strong><br>v2.1.2 (Full)<br>SHA-256: 8f45b54b146143984476014b3c021c582a7ae0b6ec096dfd9afa64fa0b9a4920
+<strong>Latest Versions:</strong><br>v2.1.2 (Full)<br>SHA-256: 5814ec503815559d6d62f816b8fd9a8ed583dadb200bf4d756c4d4273ee0550c
 </p>
 
 <p align="center">
@@ -37,7 +33,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<br>v2.1.2 (Lite)<br>SHA-256: 8771531356f55f590d701052eade55bcd980671e17e1c027b03e9942cf08d6fd
+<br>v2.1.2 (Lite)<br>SHA-256: fa7a4022e3d38ef692157f05248537b99e1c2877b7cab0e1cb5a569caf9bf49a
 </p>
 
 <p align="center">
@@ -49,7 +45,7 @@ Tested on:
 </p>
 
 <p align="center">
-✅ macOS Monterey 12 through Tahoe 26.6<br>✅ Intel &amp; Apple Silicon<br>
+✅ macOS Monterey 12 through Golden Gate 27<br>✅ Intel &amp; Apple Silicon<br>
 </p>
 
 <p align="center">
@@ -94,13 +90,14 @@ It bridges the gap between casual users and power users, replacing the need to r
 <p><strong>Core Functionality</strong></p>
 
 <ul>
-    <li><strong>File Management</strong>: Manage/view quarantine, code signatures, extended attributes, permissions, binary architectures, create symlinks</li>
+    <li><strong>File Management</strong>: Maanage/view code signatures, extended attributes, permissions, flags, binary architectures, create symlinks</li>
     <li><strong>Privacy &amp; Security</strong>: Generate file hashes, audit file types, manage the TCC database, manage the system's hosts file, test a machine's isolation/exposure status</li>
     <li><strong>System Utilities</strong>: DNS management, network testing, system information, manage Time Machine snapshots, monitor system activity</li>
     <li><strong>macOS Preferences</strong>: Configure various default system settings and behaviors</li>
     <li><strong>Diff Tracker</strong>: Track changes to the file system, preference files, websites, compare file differences</li>
-    <li><strong>Disk Image Tools</strong>: Create/resize disk images and make macOS installers</li>
+    <li><strong>Disk Image Tools</strong>: Create/resize/manage disk images and download/make macOS installers</li>
     <li><strong>Package Management</strong>: Batch-install .pkg files</li>
+	<li><strong>PDF Parsing</strong>: Extract data from PDFs</li>
     <li><strong>Settings</strong>: Manage all preferences and data saved by OneCommand</li>
     <li><strong>Path Picker</strong>: Dedicated global prompt for providing file paths</li>
 </ul>
