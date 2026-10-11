@@ -25,7 +25,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<strong>Latest Versions:</strong><br>v2.1.2 (Full)<br>SHA-256: 5814ec503815559d6d62f816b8fd9a8ed583dadb200bf4d756c4d4273ee0550c
+<strong>Latest Versions:</strong><br>v3.0.0 (Full)<br>SHA-256: 5814ec503815559d6d62f816b8fd9a8ed583dadb200bf4d756c4d4273ee0550c
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@ Available as a free (Lite) version here on github or a paid (Full) version avail
 </p>
 
 <p align="center">
-<br>v2.1.2 (Lite)<br>SHA-256: fa7a4022e3d38ef692157f05248537b99e1c2877b7cab0e1cb5a569caf9bf49a
+<br>v3.0.0 (Lite)<br>SHA-256: fa7a4022e3d38ef692157f05248537b99e1c2877b7cab0e1cb5a569caf9bf49a
 </p>
 
 <p align="center">
