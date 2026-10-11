@@ -90,7 +90,7 @@ It bridges the gap between casual users and power users, replacing the need to r
 <p><strong>Core Functionality</strong></p>
 
 <ul>
-    <li><strong>File Management</strong>: Maanage/view code signatures, extended attributes, permissions, flags, binary architectures, create symlinks</li>
+    <li><strong>File Management</strong>: Manage/view code signatures, extended attributes, permissions, flags, binary architectures, create symlinks</li>
     <li><strong>Privacy &amp; Security</strong>: Generate file hashes, audit file types, manage the TCC database, manage the system's hosts file, test a machine's isolation/exposure status</li>
     <li><strong>System Utilities</strong>: DNS management, network testing, system information, manage Time Machine snapshots, monitor system activity</li>
     <li><strong>macOS Preferences</strong>: Configure various default system settings and behaviors</li>
