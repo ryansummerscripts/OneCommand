@@ -116,7 +116,7 @@ It bridges the gap between casual users and power users, replacing the need to r
 <p><strong>Key Design Patterns</strong></p>
 
 <ul>
-    <li>Global navigation system (continue/back/previous/next/stop/path picker/settings/quit)</li>
+    <li>Global navigation system (continue/back/previous/next/stop/paths/manual/settings/quit)</li>
     <li>Consistent error handling and retry mechanisms</li>
     <li>Automatic Terminal window resizing when displaying large output</li>
     <li>User-friendly prompts and status reporting</li>
